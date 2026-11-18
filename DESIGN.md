@@ -9,7 +9,7 @@ Interpretasi konsep: meja tulis digital yang tenang untuk pemakaian pribadi. ENE
 - Tipografi sans untuk kontrol dan teks panjang; tebal asli dipakai di editor agar format bold jelas terlihat.
 - Ruang lebar di sekeliling editor menjaga fokus pada tulisan. Checklist lebih rapat untuk pemindaian, kanban berupa kolom untuk menunjukkan status.
 - Kartu hanya dipakai untuk tugas kanban karena setiap tugas harus bisa dipindahkan sebagai satu unit.
-- Identitas berupa nama teks Notez dan garis pembatas horizontal, tanpa ilustrasi, logo buatan, gradien, atau animasi dekoratif.
+- Identitas memakai monogram N putih berlatar hitam yang dibuat atas permintaan pengguna, dengan potongan diagonal menyerupai lipatan kertas. Logo yang sama tampil pada EXE, jendela, dan header sidebar; nama Notez tetap menjelaskan aplikasi.
 - Tombol berlabel, indikator fokus keyboard, empty state, dan kesalahan penyimpanan harus terlihat. Semua data lokal; tidak ada akun atau layanan jaringan.
 - Penyimpanan mengikuti jeda aktivitas agar menulis dan menghapus tidak memerlukan tombol Simpan. Status kecil menjelaskan autosave tanpa mengganggu editor; pilihan folder hanya tampil bila terjadi masalah penyimpanan.
 

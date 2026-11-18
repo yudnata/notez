@@ -18,6 +18,12 @@ Toolchain portable untuk mesin ini ada di `.tools` dan tidak mengubah PATH Windo
 
 Hasil build ada di `target/release/notez.exe`. Salinan siap jalan ditempatkan di `Notez.exe` pada root proyek.
 
+## Logo dan ikon aplikasi
+
+Logo N dipasang pada ikon file EXE Windows, ikon jendela/taskbar, dan header sidebar. Gambar asli ada di `assets/logo-notez.png`. Ikon Windows memakai `assets/notez.ico` dengan ukuran 16, 24, 32, 48, 64, 128, dan 256 px; jendela memakai `assets/notez-icon-256.png`.
+
+Jika gambar asli diganti, jalankan `scripts/make-icon.ps1`, lalu build ulang. `build.rs` menanam resource ikon ke EXE secara otomatis. Build GNU di Windows memakai converter resource .NET Framework bila tersedia, atau `windres` dari binutils. Lokasi converter bisa ditentukan lewat `CVTRES` atau `WINDRES`. Build MSVC menautkan resource langsung.
+
 ## Fitur konsep awal
 
 - Notes: format seleksi teks dengan ukuran 12–48 px, bold, italic, underline; atur jarak baris untuk satu catatan. Format tanpa seleksi berlaku untuk tulisan berikutnya. Undo/redo menyertakan format teks, hingga 100 perubahan selama catatan aktif.

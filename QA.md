@@ -10,6 +10,7 @@ Tanggal: 18 November 2026, Asia/Makassar.
 - Build release mencakup revisi smart autosave dan tema monokrom. Salinan siap jalan tersedia di root proyek sebagai `Notez.exe`.
 - Peluncuran release revisi: judul jendela Notez, `Responding=True`, stderr kosong. Hash SHA-256 salinan root sama dengan hasil build release.
 - Tiga belas unit test lulus. Pengujian frame memakai egui tanpa layar; ini bukan pengujian screenshot atau klik pada jendela Windows.
+- Revisi ikon: logo N dimuat pada jendela serta header sidebar. Resource EXE berisi tujuh RT_ICON dan satu RT_GROUP_ICON; inspeksi resource selesai tanpa error. Ekstraksi ikon langsung dari hasil EXE menghasilkan logo N, diperiksa secara visual pada `test-data/embedded-exe-icon.png`.
 
 ## Pengujian otomatis
 
@@ -60,4 +61,4 @@ Tanggal: 18 November 2026, Asia/Makassar.
 
 Layanan Computer Use tidak tersambung: `Computer Use native pipe is unavailable ... os error 2`. Percobaan melalui dua antarmuka kontrol memberikan kendala yang sama. Karena itu screenshot, pemeriksaan visual, klik seluruh kontrol, drag-drop fisik, urutan Tab, dan dialog file Windows belum terverifikasi secara langsung. Aplikasi ini diserahkan sebagai konsep awal yang dapat dijalankan; audit visual penuh belum dinyatakan lulus.
 
-Empty state dan error state tersedia. Data lokal dimuat secara sinkron sebelum UI muncul, sehingga tidak ada indikator loading buatan. Tema yang disediakan hanya dark mode sesuai permintaan. Tidak ada aset visual atau statistik buatan. Alasan desain dan arah visual tercatat di `DESIGN.md`.
+Empty state dan error state tersedia. Data lokal dimuat secara sinkron sebelum UI muncul, sehingga tidak ada indikator loading buatan. Tema yang disediakan hanya dark mode sesuai permintaan. Logo dibuat dengan ImageGen atas permintaan pengguna; tidak ada statistik buatan. Alasan desain dan arah visual tercatat di `DESIGN.md`.

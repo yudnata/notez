@@ -17,6 +17,7 @@ const MUTED: Color32 = Color32::from_gray(165);
 const ACCENT: Color32 = Color32::from_gray(211);
 
 struct Notez {
+    logo: Option<egui::TextureHandle>,
     workspace: Workspace,
     path: PathBuf,
     kind: Kind,
@@ -53,6 +54,7 @@ impl Notez {
         let kind = workspace.documents.first().map_or(Kind::Note, |d| d.kind);
         let load_failed = error.is_some();
         Self {
+            logo: None,
             workspace,
             path,
             kind,
@@ -304,13 +306,28 @@ impl Notez {
     }
 
     fn sidebar(&mut self, ctx: &egui::Context) {
+        let logo = self.logo.get_or_insert_with(|| {
+            let icon = app_icon();
+            ctx.load_texture(
+                "notez-logo",
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [icon.width as usize, icon.height as usize],
+                    &icon.rgba,
+                ),
+                egui::TextureOptions::LINEAR,
+            )
+        });
+        let logo_id = logo.id();
         egui::SidePanel::left("sidebar")
             .exact_width(222.0)
             .resizable(false)
             .frame(egui::Frame::new().fill(PANEL).inner_margin(18.0))
             .show(ctx, |ui| {
                 ui.add_space(12.0);
-                ui.label(RichText::new("notez.").size(31.0).strong().color(TEXT));
+                ui.horizontal(|ui| {
+                    ui.add(egui::Image::new((logo_id, egui::vec2(40.0, 40.0))).corner_radius(6.0));
+                    ui.label(RichText::new("notez.").size(31.0).strong().color(TEXT));
+                });
                 ui.label(
                     RichText::new("Ruang untuk pikiranmu")
                         .size(12.0)
@@ -1169,11 +1186,17 @@ impl eframe::App for Notez {
     }
 }
 
+fn app_icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!("../assets/notez-icon-256.png"))
+        .expect("Bundled Notez icon must be a valid PNG")
+}
+
 fn main() -> eframe::Result {
     eframe::run_native(
         "Notez",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
+                .with_icon(app_icon())
                 .with_inner_size([1280.0, 820.0])
                 .with_min_inner_size([940.0, 620.0]),
             renderer: eframe::Renderer::Glow,
@@ -1189,6 +1212,7 @@ mod ui_tests {
 
     fn app() -> Notez {
         Notez {
+            logo: None,
             workspace: Workspace::default(),
             path: PathBuf::new(),
             kind: Kind::Note,
