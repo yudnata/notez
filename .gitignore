@@ -1,0 +1,7 @@
+/target/
+/.tools/
+/dist/
+/test-data/
+*.tmp
+/Notez.exe
+

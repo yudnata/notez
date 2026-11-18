@@ -1,0 +1,17 @@
+[package]
+name = "notez"
+version = "0.1.0"
+edition = "2024"
+description = "A local desktop notebook with rich notes, checklists, and kanban."
+
+[dependencies]
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "accesskit", "wayland", "x11"] }
+egui = "0.33"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rfd = "0.15"
+
+[profile.release]
+lto = "thin"
+strip = true
+
