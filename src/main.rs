@@ -124,12 +124,12 @@ impl Notvas {
         } else {
             (Workspace::default(), None)
         };
-        let first = workspace
+        let kind = Kind::Note;
+        let selected = workspace
             .documents
             .iter()
-            .find(|d| Kind::NAVIGATION.contains(&d.kind));
-        let selected = first.map(|d| d.id);
-        let kind = first.map_or(Kind::Note, |d| d.kind);
+            .find(|d| d.kind == kind)
+            .map(|d| d.id);
         let load_failed = error.is_some();
         Self {
             content_zoom: [1.0; 3],
@@ -189,7 +189,7 @@ impl Notvas {
     }
 
     fn select(&mut self, id: Option<u64>) {
-        self.note_images = note_images::NoteImages::default();
+        self.note_images.reset_interaction();
         self.canvas_editor.reset();
         self.selected = id;
         self.selection = 0..0;
@@ -264,14 +264,15 @@ impl Notvas {
                     self.workspace = ws;
                     self.path = path;
                     self.load_failed = false;
-                    let first = self
+                    self.kind = Kind::Note;
+                    self.notes_board.overview = true;
+                    let first_note = self
                         .workspace
                         .documents
                         .iter()
-                        .find(|d| Kind::NAVIGATION.contains(&d.kind))
-                        .map(|d| (d.id, d.kind));
-                    self.kind = first.map_or(Kind::Note, |(_, kind)| kind);
-                    self.select(first.map(|(id, _)| id));
+                        .find(|d| d.kind == Kind::Note)
+                        .map(|d| d.id);
+                    self.select(first_note);
                     self.error = None;
                     self.status = "Workspace dibuka".into();
                 }
@@ -334,9 +335,24 @@ impl Notvas {
             } else {
                 self.redo.push(current);
             }
-            self.selection = 0..0;
+            let len = doc.body.text.chars().count();
+            self.selection = self.selection.start.min(len)..self.selection.end.min(len);
             self.change();
         }
+    }
+
+    fn restore_note_selection(&self, ctx: &egui::Context) {
+        let text_id = egui::Id::new("note-body");
+        if let Some(mut state) = egui::TextEdit::load_state(ctx, text_id) {
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(self.selection.start),
+                    egui::text::CCursor::new(self.selection.end),
+                )));
+            state.store(ctx, text_id);
+        }
+        ctx.memory_mut(|m| m.request_focus(text_id));
     }
 
     fn apply_format(&mut self, previous: TextStyle) {
@@ -368,6 +384,31 @@ impl Notvas {
             }
             self.remember(before);
             self.change_immediately();
+        }
+    }
+
+    fn set_alignment(&mut self, align: model::TextAlign) {
+        self.typing.align = align;
+        let selected_image = self.note_images.selected;
+        let available = self.note_images.last_available_width;
+        if let Some(doc) = self
+            .workspace
+            .documents
+            .iter_mut()
+            .find(|d| Some(d.id) == self.selected)
+        {
+            let before = doc.body.clone();
+            let mut changed = false;
+            if let Some(image_id) = selected_image {
+                changed |= doc.body.apply_image_align(image_id, align, available);
+            }
+            if selected_image.is_none() || !self.selection.is_empty() {
+                changed |= doc.body.apply_align(self.selection.clone(), align);
+            }
+            if changed {
+                self.remember(before);
+                self.change_immediately();
+            }
         }
     }
 
@@ -403,7 +444,11 @@ impl Notvas {
             }
         }
         let editor_focused = ctx.memory(|m| m.has_focus(egui::Id::new("note-body")));
-        if editor_focused {
+        let note_active = editor_focused
+            || (self.kind == Kind::Note
+                && !self.notes_board.overview
+                && self.note_images.selected.is_some());
+        if note_active {
             if ctx.input_mut(|i| {
                 i.consume_key(
                     egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
@@ -426,6 +471,16 @@ impl Notvas {
                         _ => self.typing.underline = !self.typing.underline,
                     }
                     self.apply_format(previous);
+                }
+            }
+            for (key, align) in [
+                (egui::Key::L, model::TextAlign::Left),
+                (egui::Key::E, model::TextAlign::Center),
+                (egui::Key::R, model::TextAlign::Right),
+                (egui::Key::J, model::TextAlign::Justify),
+            ] {
+                if ctx.input_mut(|i| i.consume_key(command, key)) {
+                    self.set_alignment(align);
                 }
             }
         }
@@ -591,12 +646,9 @@ impl Notvas {
             });
             return;
         };
-        if self.kind == Kind::Note {
-            self.note(ui, index);
-            return;
-        }
-        self.document_heading(ui, index);
         match self.kind {
+            Kind::Note => self.note(ui, index),
+            Kind::Checklist => self.checklist(ui, index),
             Kind::Canvas => {
                 let doc = &mut self.workspace.documents[index];
                 let changed = self.canvas_editor.show(ui, &mut doc.canvas, &mut doc.title);
@@ -607,67 +659,14 @@ impl Notvas {
                     self.error = Some(error);
                 }
             }
-            Kind::Note => unreachable!(),
-            Kind::Checklist => self.checklist(ui, index),
-            Kind::Kanban => self.kanban(ui, index),
+            Kind::Kanban => {
+                self.document_heading(ui, index);
+                self.kanban(ui, index);
+            }
         }
     }
 
     fn document_heading(&mut self, ui: &mut egui::Ui, index: usize) {
-        if matches!(self.kind, Kind::Note | Kind::Checklist) {
-            let compact = ui.available_width() < 520.0;
-            egui::Grid::new(if self.kind == Kind::Note {
-                "note-actions"
-            } else {
-                "checklist-actions"
-            })
-            .num_columns(if compact { 2 } else { 4 })
-            .show(ui, |ui| {
-                if ui
-                    .add(crate::controls::button(ui, "Kembali ke papan"))
-                    .clicked()
-                {
-                    self.flush();
-                    if self.kind == Kind::Note {
-                        self.notes_board.overview = true;
-                    } else {
-                        self.checklist_board.overview = true;
-                    }
-                }
-                if ui.add(crate::controls::button(ui, "Hapus")).clicked() {
-                    self.delete_document = true;
-                }
-                if compact {
-                    ui.end_row();
-                }
-                {
-                    let doc = &mut self.workspace.documents[index];
-                    let mut changed = false;
-                    crate::controls::menu(ui, "Warna", |ui| {
-                        changed = notes_board::note_palette(ui, &mut doc.note_color);
-                    });
-                    if changed {
-                        self.change_immediately();
-                    }
-                }
-                if self.kind == Kind::Note {
-                    crate::controls::menu(ui, "Ekspor", |ui| {
-                        if ui
-                            .add(crate::controls::button(ui, "HTML (dengan format)"))
-                            .clicked()
-                        {
-                            ui.close();
-                            self.export(true);
-                        }
-                        if ui.add(crate::controls::button(ui, "Teks (.txt)")).clicked() {
-                            ui.close();
-                            self.export(false);
-                        }
-                    });
-                }
-                ui.end_row();
-            });
-        }
         if self.kind != Kind::Canvas {
             ui.add_space(8.0);
             if ui
@@ -697,107 +696,313 @@ impl Notvas {
         let [r, g, b] = self.workspace.documents[index].note_color;
         let paper = Color32::from_rgb(r, g, b);
         let header_color = note_header_color([r, g, b]);
-        let wrap = egui::Frame::new()
-            .fill(paper)
-            .corner_radius(SHELL_RADIUS)
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.set_min_height(ui.available_height());
-                let mut format_changed = false;
-                let header = egui::Frame::new()
-                    .fill(header_color)
-                    .corner_radius(egui::CornerRadius {
-                        nw: SHELL_RADIUS,
-                        ne: SHELL_RADIUS,
-                        sw: 0,
-                        se: 0,
-                    })
-                    .inner_margin(16.0)
-                    .show(ui, |ui| {
-                        note_header_style(ui, header_color);
-                        self.document_heading(ui, index);
-                        format_changed = self.note_toolbar(ui, index);
+        let mut format_changed = false;
+        let height = ui.available_height();
+        let compact = ui.available_width() < 520.0;
+        let toolbar_width = if compact { 112.0 } else { 204.0 };
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(toolbar_width, height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    let rail = egui::Frame::new()
+                        .fill(Color32::WHITE)
+                        .corner_radius(8)
+                        .stroke(Stroke::new(0.8_f32, SHELL_BORDER))
+                        .inner_margin(8.0)
+                        .show(ui, |ui| {
+                            ui.set_min_height((height - 16.0).max(0.0));
+                            egui::ScrollArea::vertical()
+                                .id_salt("note-tools-scroll")
+                                .auto_shrink([false, false])
+                                .max_height((height - 16.0).max(120.0))
+                                .show(ui, |ui| {
+                                    ui.set_width((toolbar_width - 20.0).max(60.0));
+                                    format_changed = self.note_toolbar(ui, index);
+                                });
+                        });
+                    ui.ctx().data_mut(|data| {
+                        data.insert_temp(egui::Id::new("note-toolbar-bounds"), rail.response.rect)
                     });
-                ui.ctx().data_mut(|data| {
-                    data.insert_temp(egui::Id::new("note-header-bounds"), header.response.rect)
-                });
-                egui::Frame::new()
-                    .inner_margin(16.0)
-                    .show(ui, |ui| self.note_body(ui, index, format_changed));
-            });
-        ui.ctx().data_mut(|data| {
-            data.insert_temp(egui::Id::new("note-paper-bounds"), wrap.response.rect)
+                },
+            );
+            ui.add_space(8.0);
+            let body_width = ui.available_width().max(1.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(body_width, height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    let wrap = egui::Frame::new()
+                        .fill(paper)
+                        .corner_radius(SHELL_RADIUS)
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.set_min_height(ui.available_height());
+                            let header = egui::Frame::new()
+                                .fill(header_color)
+                                .corner_radius(egui::CornerRadius {
+                                    nw: SHELL_RADIUS,
+                                    ne: SHELL_RADIUS,
+                                    sw: 0,
+                                    se: 0,
+                                })
+                                .inner_margin(egui::Margin::symmetric(16, 10))
+                                .show(ui, |ui| {
+                                    note_header_style(ui, header_color);
+                                    if ui
+                                        .add(
+                                            TextEdit::singleline(
+                                                &mut self.workspace.documents[index].title,
+                                            )
+                                            .font(FontId::new(
+                                                if ui.available_width() < 640.0 {
+                                                    24.0
+                                                } else {
+                                                    30.0
+                                                },
+                                                FontFamily::Name("hand".into()),
+                                            ))
+                                            .frame(false)
+                                            .hint_text("Tanpa judul")
+                                            .desired_width(f32::INFINITY),
+                                        )
+                                        .changed()
+                                    {
+                                        self.change();
+                                    }
+                                });
+                            ui.ctx().data_mut(|data| {
+                                data.insert_temp(
+                                    egui::Id::new("note-header-bounds"),
+                                    header.response.rect,
+                                )
+                            });
+                            egui::Frame::new()
+                                .inner_margin(16.0)
+                                .show(ui, |ui| self.note_body(ui, index, format_changed));
+                        });
+                    ui.ctx().data_mut(|data| {
+                        data.insert_temp(egui::Id::new("note-paper-bounds"), wrap.response.rect)
+                    });
+                },
+            );
         });
     }
 
     fn note_toolbar(&mut self, ui: &mut egui::Ui, index: usize) -> bool {
         let previous = self.typing;
         let mut format_changed = false;
+        let mut selection_action = false;
+        let mut align_changed = None;
+        let mut list_toggled = None;
         let mut insert_image = false;
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().button_padding.x = 6.0;
-            ui.spacing_mut().item_spacing.x = 6.0;
-            format_changed |= ui
-                .selectable_label(self.typing.bold, RichText::new("B").strong())
-                .on_hover_text("Tebal · Ctrl+B")
-                .clicked()
-                .then(|| self.typing.bold = !self.typing.bold)
-                .is_some();
-            format_changed |= ui
-                .selectable_label(self.typing.italic, RichText::new("I").italics())
-                .on_hover_text("Miring · Ctrl+I")
-                .clicked()
-                .then(|| self.typing.italic = !self.typing.italic)
-                .is_some();
-            format_changed |= ui
-                .selectable_label(self.typing.underline, RichText::new("U").underline())
-                .on_hover_text("Garis bawah · Ctrl+U")
-                .clicked()
-                .then(|| self.typing.underline = !self.typing.underline)
-                .is_some();
-            ui.separator();
-            ui.label("Ukuran");
-            egui::ComboBox::from_id_salt("font-size")
-                .width(55.0)
-                .selected_text(format!("{}", self.typing.size))
-                .show_ui(ui, |ui| {
-                    for size in [12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 40.0, 48.0] {
-                        format_changed |= ui
-                            .selectable_value(&mut self.typing.size, size, format!("{size}"))
-                            .changed();
-                    }
-                });
-            ui.label("Jarak baris");
-            let spacing = &mut self.workspace.documents[index].spacing;
-            let old = *spacing;
-            egui::ComboBox::from_id_salt("line-spacing")
-                .width(50.0)
-                .selected_text(format!("{spacing:.1}"))
-                .show_ui(ui, |ui| {
-                    for value in [1.0, 1.3, 1.5, 1.8, 2.0, 2.5] {
-                        ui.selectable_value(spacing, value, format!("{value:.1}"));
-                    }
-                });
-            if *spacing != old {
-                self.change_immediately();
-            }
-            ui.separator();
+        let active_list = self.workspace.documents[index]
+            .body
+            .list_at(self.selection.start);
+        let active_align = self
+            .note_images
+            .selected
+            .and_then(|id| {
+                self.workspace.documents[index]
+                    .body
+                    .images
+                    .iter()
+                    .find(|img| img.id == id)
+                    .map(|img| img.align)
+            })
+            .unwrap_or(self.typing.align);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            ui.spacing_mut().button_padding = egui::vec2(8.0, 5.0);
             if ui
-                .add_enabled(!self.undo.is_empty(), crate::controls::button(ui, "Undo"))
+                .add(crate::controls::button(ui, "Kembali ke papan"))
                 .clicked()
             {
-                self.history(false);
+                self.flush();
+                self.notes_board.overview = true;
             }
-            if ui
-                .add_enabled(!self.redo.is_empty(), crate::controls::button(ui, "Redo"))
-                .clicked()
-            {
-                self.history(true);
+            ui.horizontal_wrapped(|ui| {
+                let doc = &mut self.workspace.documents[index];
+                let mut color_changed = false;
+                crate::controls::menu(ui, "Warna", |ui| {
+                    color_changed = notes_board::note_palette(ui, &mut doc.note_color);
+                });
+                if color_changed {
+                    self.change_immediately();
+                }
+                crate::controls::menu(ui, "Ekspor", |ui| {
+                    if ui
+                        .add(crate::controls::button(ui, "HTML (dengan format)"))
+                        .clicked()
+                    {
+                        ui.close();
+                        self.export(true);
+                    }
+                    if ui.add(crate::controls::button(ui, "Teks (.txt)")).clicked() {
+                        ui.close();
+                        self.export(false);
+                    }
+                });
+            });
+            ui.horizontal_wrapped(|ui| {
+                if ui.add(crate::controls::button(ui, "Hapus")).clicked() {
+                    self.delete_document = true;
+                }
+                insert_image = ui.add(crate::controls::button(ui, "Gambar...")).clicked();
+            });
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                format_changed |= ui
+                    .selectable_label(self.typing.bold, RichText::new("B").strong())
+                    .on_hover_text("Tebal · Ctrl+B")
+                    .clicked()
+                    .then(|| self.typing.bold = !self.typing.bold)
+                    .is_some();
+                format_changed |= ui
+                    .selectable_label(self.typing.italic, RichText::new("I").italics())
+                    .on_hover_text("Miring · Ctrl+I")
+                    .clicked()
+                    .then(|| self.typing.italic = !self.typing.italic)
+                    .is_some();
+                format_changed |= ui
+                    .selectable_label(self.typing.underline, RichText::new("U").underline())
+                    .on_hover_text("Garis bawah · Ctrl+U")
+                    .clicked()
+                    .then(|| self.typing.underline = !self.typing.underline)
+                    .is_some();
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().button_padding = egui::vec2(5.0, 5.0);
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for align in model::TextAlign::ALL {
+                    let response = ui
+                        .add(crate::controls::icon_button(
+                            ui,
+                            align.label(),
+                            active_align == align,
+                        ))
+                        .on_hover_text(align.shortcut_hint());
+                    ui.ctx().data_mut(|data| {
+                        data.insert_temp(
+                            egui::Id::new(("note-align", align.label())),
+                            response.rect,
+                        );
+                    });
+                    if response.clicked() {
+                        align_changed = Some(align);
+                    }
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().button_padding = egui::vec2(5.0, 4.0);
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for kind in model::ListKind::TOOLBAR {
+                    let response = ui
+                        .selectable_label(
+                            active_list == Some(kind),
+                            RichText::new(kind.button_label()).strong(),
+                        )
+                        .on_hover_text(kind.hint());
+                    ui.ctx().data_mut(|data| {
+                        data.insert_temp(
+                            egui::Id::new(("note-list", kind.button_label())),
+                            response.rect,
+                        );
+                    });
+                    if response.clicked() {
+                        list_toggled = Some(kind);
+                    }
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Ukuran");
+                egui::ComboBox::from_id_salt("font-size")
+                    .width(55.0)
+                    .selected_text(format!("{}", self.typing.size))
+                    .show_ui(ui, |ui| {
+                        for size in [12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 40.0, 48.0] {
+                            format_changed |= ui
+                                .selectable_value(&mut self.typing.size, size, format!("{size}"))
+                                .changed();
+                        }
+                    });
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Jarak baris");
+                let spacing = &mut self.workspace.documents[index].spacing;
+                let old = *spacing;
+                egui::ComboBox::from_id_salt("line-spacing")
+                    .width(50.0)
+                    .selected_text(format!("{spacing:.1}"))
+                    .show_ui(ui, |ui| {
+                        for value in [1.0, 1.3, 1.5, 1.8, 2.0, 2.5] {
+                            ui.selectable_value(spacing, value, format!("{value:.1}"));
+                        }
+                    });
+                if *spacing != old {
+                    self.change_immediately();
+                    selection_action = true;
+                }
+            });
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(!self.undo.is_empty(), crate::controls::button(ui, "Undo"))
+                    .clicked()
+                {
+                    self.history(false);
+                    selection_action = true;
+                }
+                if ui
+                    .add_enabled(!self.redo.is_empty(), crate::controls::button(ui, "Redo"))
+                    .clicked()
+                {
+                    self.history(true);
+                    selection_action = true;
+                }
+            });
+            if self.note_images.is_loading() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::Spinner::new()
+                            .size(15.0)
+                            .color(Color32::from_rgb(113, 79, 171)),
+                    );
+                    ui.label(RichText::new("Memuat gambar...").size(13.0).color(MUTED));
+                });
             }
-            insert_image = ui.add(crate::controls::button(ui, "Gambar...")).clicked();
+            if self.note_images.selected.is_some() {
+                ui.separator();
+                let before_images = self.workspace.documents[index].body.clone();
+                if self
+                    .note_images
+                    .toolbar(ui, &mut self.workspace.documents[index].body)
+                {
+                    self.remember(before_images);
+                    self.change_immediately();
+                }
+            }
         });
         if format_changed {
             self.apply_format(previous);
+            selection_action = true;
+        }
+        if let Some(align) = align_changed {
+            self.set_alignment(align);
+            format_changed = true;
+            selection_action = true;
+        }
+        if let Some(kind) = list_toggled {
+            let body = &mut self.workspace.documents[index].body;
+            let before = body.clone();
+            self.selection = body.toggle_list(self.selection.clone(), kind, self.typing);
+            self.remember(before);
+            self.change_immediately();
+            format_changed = true;
+            selection_action = true;
+        }
+        if selection_action {
+            self.restore_note_selection(ui.ctx());
         }
         if insert_image
             && let Some(path) = rfd::FileDialog::new()
@@ -806,40 +1011,56 @@ impl Notvas {
         {
             self.insert_note_image(index, &path, ui.ctx());
         }
-        let before_images = self.workspace.documents[index].body.clone();
-        if self
-            .note_images
-            .toolbar(ui, &mut self.workspace.documents[index].body)
-        {
-            self.remember(before_images);
-            self.change_immediately();
-        }
         format_changed
     }
 
     fn note_body(&mut self, ui: &mut egui::Ui, index: usize, format_changed: bool) {
+        self.note_images.text_selection = self.selection.clone();
         let doc = &self.workspace.documents[index];
         let before = doc.body.clone();
         let mut text = before.text.clone();
         let typing = self.typing;
         let spacing = doc.spacing;
         let doc_id = doc.id;
+        let saved_selection = self.selection.clone();
         let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width: f32| {
+            let unfocused_highlight = (!ui.memory(|m| m.has_focus(egui::Id::new("note-body")))
+                && !saved_selection.is_empty())
+            .then(|| saved_selection.clone());
+            if buffer.as_str() == before.text {
+                return layout_note_with_highlight(
+                    ui,
+                    &before,
+                    width,
+                    spacing,
+                    typing.align,
+                    unfocused_highlight.as_ref(),
+                );
+            }
             let mut styled = before.clone();
             styled.reconcile(buffer.as_str().into(), typing);
-            ui.fonts_mut(|fonts| fonts.layout_job(layout_job(&styled, width, spacing)))
+            layout_note_with_highlight(
+                ui,
+                &styled,
+                width,
+                spacing,
+                typing.align,
+                unfocused_highlight.as_ref(),
+            )
         };
         let mut output = None;
         let mut images_changed = false;
         let mut drop_at = None;
+        let mut auto_cursor = None;
         let body = &mut self.workspace.documents[index].body;
         egui::ScrollArea::vertical()
             .id_salt(("note-scroll", doc_id))
+            .auto_shrink([false, false])
             .show_pannable(ui, [false, true], |ui| {
                 let available = (ui
                     .available_width()
                     .min(ui.clip_rect().right() - ui.cursor().left())
-                    - 8.0)
+                    - 24.0)
                     .max(1.0);
                 let edit = TextEdit::multiline(&mut text)
                     .id(egui::Id::new("note-body"))
@@ -851,6 +1072,15 @@ impl Notvas {
                     .layouter(&mut layouter)
                     .show(ui);
                 if edit.response.changed() {
+                    let current_cursor = edit
+                        .cursor_range
+                        .map_or_else(|| text.chars().count(), |r| r.primary.index);
+                    if let Some((rewritten, new_cursor)) =
+                        model::auto_list_transform(&before.text, &text, current_cursor)
+                    {
+                        text = rewritten;
+                        auto_cursor = Some(new_cursor);
+                    }
                     body.reconcile(text.clone(), typing);
                 }
                 if ui.input(|i| !i.raw.dropped_files.is_empty())
@@ -874,7 +1104,18 @@ impl Notvas {
                 }
                 self.change();
             }
-            if let Some(range) = output.cursor_range {
+            if let Some(new_cursor) = auto_cursor {
+                self.selection = new_cursor..new_cursor;
+                let text_id = egui::Id::new("note-body");
+                if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), text_id) {
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::one(
+                            egui::text::CCursor::new(new_cursor),
+                        )));
+                    state.store(ui.ctx(), text_id);
+                }
+            } else if let Some(range) = output.cursor_range {
                 let sorted = range.as_sorted_char_range();
                 if sorted != self.selection && !format_changed {
                     let styles = &self.workspace.documents[index].body.styles;
@@ -886,6 +1127,9 @@ impl Notvas {
                     if let Some(style) = styles.get(position) {
                         self.typing = *style;
                     }
+                    self.typing.align = self.workspace.documents[index]
+                        .body
+                        .align_at(sorted.start, self.typing.align);
                 }
                 self.selection = sorted;
             }
@@ -946,33 +1190,40 @@ impl Notvas {
         }
     }
 
-    fn task_input(&mut self, ui: &mut egui::Ui, index: usize) {
+    fn task_input(&mut self, ui: &mut egui::Ui, index: usize, on_paper: bool) {
         let mut add = false;
-        egui::Frame::new()
-            .fill(Color32::WHITE)
+        let mut frame = egui::Frame::new()
+            .fill(if on_paper {
+                Color32::TRANSPARENT
+            } else {
+                Color32::WHITE
+            })
             .corner_radius(10)
-            .inner_margin(10.0)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let response = ui.add_sized(
-                        [(ui.available_width() - 96.0).max(24.0), 44.0],
-                        TextEdit::singleline(&mut self.new_task)
-                            .frame(false)
-                            .vertical_align(egui::Align::Center)
-                            .hint_text("Tulis tugas baru..."),
-                    );
-                    add = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    add |= ui
-                        .add_enabled(
-                            !self.new_task.trim().is_empty(),
-                            crate::controls::button(ui, "Tambah").min_size(egui::vec2(88.0, 44.0)),
-                        )
-                        .clicked();
-                    if add {
-                        response.request_focus();
-                    }
-                });
+            .inner_margin(10.0);
+        if on_paper {
+            frame = frame.stroke(Stroke::new(0.9_f32, Color32::from_black_alpha(38)));
+        }
+        frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let response = ui.add_sized(
+                    [(ui.available_width() - 96.0).max(24.0), 44.0],
+                    TextEdit::singleline(&mut self.new_task)
+                        .frame(false)
+                        .vertical_align(egui::Align::Center)
+                        .hint_text("Tulis tugas baru..."),
+                );
+                add = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                add |= ui
+                    .add_enabled(
+                        !self.new_task.trim().is_empty(),
+                        crate::controls::button(ui, "Tambah").min_size(egui::vec2(88.0, 44.0)),
+                    )
+                    .clicked();
+                if add {
+                    response.request_focus();
+                }
             });
+        });
         if add && !self.new_task.trim().is_empty() {
             let id = self.workspace.id();
             self.workspace.documents[index].tasks.push(Task {
@@ -987,111 +1238,286 @@ impl Notvas {
         }
     }
 
+    fn checklist_toolbar(&mut self, ui: &mut egui::Ui, index: usize) {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            ui.spacing_mut().button_padding = egui::vec2(8.0, 5.0);
+            if ui
+                .add(crate::controls::button(ui, "Kembali ke papan"))
+                .clicked()
+            {
+                self.flush();
+                self.checklist_board.overview = true;
+            }
+            ui.horizontal_wrapped(|ui| {
+                let doc = &mut self.workspace.documents[index];
+                let mut color_changed = false;
+                crate::controls::menu(ui, "Warna", |ui| {
+                    color_changed = notes_board::note_palette(ui, &mut doc.note_color);
+                });
+                if color_changed {
+                    self.change_immediately();
+                }
+                if ui.add(crate::controls::button(ui, "Hapus")).clicked() {
+                    self.delete_document = true;
+                }
+            });
+            ui.separator();
+            let tasks = &self.workspace.documents[index].tasks;
+            let done = tasks.iter().filter(|t| t.done).count();
+            ui.label(RichText::new("Progress").size(12.0).strong());
+            ui.label(
+                RichText::new(format!("{done} dari {} tugas selesai", tasks.len()))
+                    .size(13.0)
+                    .color(MUTED),
+            );
+        });
+    }
+
     fn checklist(&mut self, ui: &mut egui::Ui, index: usize) {
-        let tasks = &self.workspace.documents[index].tasks;
-        let done = tasks.iter().filter(|t| t.done).count();
-        ui.label(RichText::new(format!("{done} dari {} tugas selesai", tasks.len())).color(MUTED));
-        ui.add_space(14.0);
-        self.task_input(ui, index);
-        ui.add_space(18.0);
+        let [r, g, b] = self.workspace.documents[index].note_color;
+        let paper = Color32::from_rgb(r, g, b);
+        let header_color = note_header_color([r, g, b]);
+        let height = ui.available_height();
+        let compact = ui.available_width() < 520.0;
+        let toolbar_width = if compact { 112.0 } else { 204.0 };
         let mut changed = false;
         let mut immediate = false;
         let mut delete = None;
-        egui::ScrollArea::vertical()
-            .id_salt("checklist-scroll")
-            .auto_shrink([false, false])
-            .show_pannable(ui, [false, true], |ui| {
-                let tasks = &mut self.workspace.documents[index].tasks;
-                for task in tasks {
-                    ui.push_id(task.id, |ui| {
-                        let card = egui::Frame::new()
-                            .fill(Color32::WHITE)
-                            .corner_radius(10)
-                            .inner_margin(10.0)
-                            .show(ui, |ui| {
-                                let width = ui.available_width();
-                                let compact = width < 420.0;
-                                let delete_width = if compact { 44.0 } else { 90.0 };
-                                let text_width = (width
-                                    - 44.0
-                                    - delete_width
-                                    - ui.spacing().item_spacing.x * 2.0)
-                                    .max(24.0);
-                                ui.horizontal(|ui| {
-                                    let checkbox =
-                                        controls::task_checkbox(ui, &mut task.done, &task.text);
-                                    immediate |= checkbox.changed();
-                                    ui.ctx().data_mut(|data| {
-                                        data.insert_temp(
-                                            egui::Id::new(("checklist-check", task.id)),
-                                            checkbox.id,
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(toolbar_width, height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    let rail = egui::Frame::new()
+                        .fill(Color32::WHITE)
+                        .corner_radius(8)
+                        .stroke(Stroke::new(0.8_f32, SHELL_BORDER))
+                        .inner_margin(8.0)
+                        .show(ui, |ui| {
+                            ui.set_min_height((height - 16.0).max(0.0));
+                            egui::ScrollArea::vertical()
+                                .id_salt("checklist-tools-scroll")
+                                .auto_shrink([false, false])
+                                .max_height((height - 16.0).max(120.0))
+                                .show(ui, |ui| {
+                                    ui.set_width((toolbar_width - 20.0).max(60.0));
+                                    self.checklist_toolbar(ui, index);
+                                });
+                        });
+                    ui.ctx().data_mut(|data| {
+                        data.insert_temp(
+                            egui::Id::new("checklist-toolbar-bounds"),
+                            rail.response.rect,
+                        )
+                    });
+                },
+            );
+            ui.add_space(8.0);
+            let body_width = ui.available_width().max(1.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(body_width, height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::Frame::new()
+                        .fill(paper)
+                        .corner_radius(SHELL_RADIUS)
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.set_min_height(ui.available_height());
+                            egui::Frame::new()
+                                .fill(header_color)
+                                .corner_radius(egui::CornerRadius {
+                                    nw: SHELL_RADIUS,
+                                    ne: SHELL_RADIUS,
+                                    sw: 0,
+                                    se: 0,
+                                })
+                                .inner_margin(egui::Margin::symmetric(16, 10))
+                                .show(ui, |ui| {
+                                    note_header_style(ui, header_color);
+                                    if ui
+                                        .add(
+                                            TextEdit::singleline(
+                                                &mut self.workspace.documents[index].title,
+                                            )
+                                            .font(FontId::new(
+                                                if ui.available_width() < 640.0 {
+                                                    24.0
+                                                } else {
+                                                    30.0
+                                                },
+                                                FontFamily::Name("hand".into()),
+                                            ))
+                                            .frame(false)
+                                            .hint_text("Tanpa judul")
+                                            .desired_width(f32::INFINITY),
                                         )
-                                    });
-                                    let done = task.done;
-                                    let ink = if done { MUTED } else { TEXT };
-                                    let mut layouter =
-                                        |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, _: f32| {
-                                            let mut job = egui::text::LayoutJob::simple_singleline(
-                                                buffer.as_str().into(),
-                                                FontId::proportional(16.0),
-                                                ink,
-                                            );
-                                            if done {
-                                                for section in &mut job.sections {
-                                                    section.format.strikethrough =
-                                                        Stroke::new(1.2_f32, ink);
-                                                }
-                                            }
-                                            ui.fonts_mut(|fonts| fonts.layout_job(job))
-                                        };
-                                    changed |= ui
-                                        .add_sized(
-                                            [text_width, 44.0],
-                                            TextEdit::singleline(&mut task.text)
-                                                .id(egui::Id::new(("checklist-text", task.id)))
-                                                .font(FontId::proportional(16.0))
-                                                .text_color(ink)
-                                                .vertical_align(egui::Align::Center)
-                                                .frame(false)
-                                                .layouter(&mut layouter),
-                                        )
-                                        .changed();
-                                    let delete_button = if compact {
-                                        controls::button_with_text(ui, "Hapus", "")
-                                    } else {
-                                        controls::button(ui, "Hapus")
-                                    };
-                                    let response = ui
-                                        .add_sized([delete_width, 44.0], delete_button)
-                                        .on_hover_text("Hapus tugas");
-                                    response.widget_info(|| {
-                                        egui::WidgetInfo::labeled(
-                                            egui::WidgetType::Button,
-                                            ui.is_enabled(),
-                                            "Hapus tugas",
-                                        )
-                                    });
-                                    ui.ctx().data_mut(|data| {
-                                        data.insert_temp(
-                                            egui::Id::new(("checklist-delete", task.id)),
-                                            response.id,
-                                        )
-                                    });
-                                    if response.clicked() {
-                                        delete = Some(task.id);
+                                        .changed()
+                                    {
+                                        self.change();
                                     }
                                 });
+                            egui::Frame::new().inner_margin(12.0).show(ui, |ui| {
+                                {
+                                    let widgets = &mut ui.visuals_mut().widgets;
+                                    widgets.inactive.weak_bg_fill = Color32::from_black_alpha(12);
+                                    widgets.inactive.bg_fill = Color32::from_black_alpha(12);
+                                    widgets.inactive.bg_stroke =
+                                        Stroke::new(0.8_f32, Color32::from_black_alpha(36));
+                                    widgets.hovered.weak_bg_fill = Color32::from_black_alpha(24);
+                                    widgets.hovered.bg_fill = Color32::from_black_alpha(24);
+                                    widgets.hovered.bg_stroke =
+                                        Stroke::new(0.8_f32, Color32::from_black_alpha(52));
+                                    widgets.active.weak_bg_fill = Color32::from_black_alpha(36);
+                                    widgets.active.bg_fill = Color32::from_black_alpha(36);
+                                    widgets.active.bg_stroke =
+                                        Stroke::new(0.8_f32, Color32::from_black_alpha(64));
+                                }
+                                self.task_input(ui, index, true);
+                                ui.add_space(12.0);
+                                egui::ScrollArea::vertical()
+                                    .id_salt("checklist-scroll")
+                                    .auto_shrink([false, false])
+                                    .show_pannable(ui, [false, true], |ui| {
+                                        let tasks = &mut self.workspace.documents[index].tasks;
+                                        for task in tasks {
+                                            ui.push_id(task.id, |ui| {
+                                                let card = egui::Frame::new()
+                                                    .fill(Color32::TRANSPARENT)
+                                                    .stroke(Stroke::new(
+                                                        0.8_f32,
+                                                        Color32::from_black_alpha(28),
+                                                    ))
+                                                    .corner_radius(10)
+                                                    .outer_margin(egui::Margin {
+                                                        left: 0,
+                                                        right: 14,
+                                                        top: 0,
+                                                        bottom: 0,
+                                                    })
+                                                    .inner_margin(10.0)
+                                                    .show(ui, |ui| {
+                                                        let width = ui.available_width();
+                                                        let compact = width < 420.0;
+                                                        let delete_width =
+                                                            if compact { 44.0 } else { 90.0 };
+                                                        let text_width = (width
+                                                            - 44.0
+                                                            - delete_width
+                                                            - ui.spacing().item_spacing.x * 2.0)
+                                                            .max(24.0);
+                                                        ui.horizontal(|ui| {
+                                                            let checkbox = controls::task_checkbox(
+                                                                ui,
+                                                                &mut task.done,
+                                                                &task.text,
+                                                            );
+                                                            immediate |= checkbox.changed();
+                                                            ui.ctx().data_mut(|data| {
+                                                                data.insert_temp(
+                                                                    egui::Id::new((
+                                                                        "checklist-check",
+                                                                        task.id,
+                                                                    )),
+                                                                    checkbox.id,
+                                                                )
+                                                            });
+                                                            let done = task.done;
+                                                            let ink = if done { MUTED } else { TEXT };
+                                                            let mut layouter = |ui: &egui::Ui,
+                                                                                buffer: &dyn egui::TextBuffer,
+                                                                                _: f32| {
+                                                                let mut job = egui::text::LayoutJob::simple_singleline(
+                                                                    buffer.as_str().into(),
+                                                                    FontId::proportional(16.0),
+                                                                    ink,
+                                                                );
+                                                                if done {
+                                                                    for section in &mut job.sections
+                                                                    {
+                                                                        section
+                                                                            .format
+                                                                            .strikethrough =
+                                                                            Stroke::new(
+                                                                                1.2_f32, ink,
+                                                                            );
+                                                                    }
+                                                                }
+                                                                ui.fonts_mut(|fonts| {
+                                                                    fonts.layout_job(job)
+                                                                })
+                                                            };
+                                                            changed |= ui
+                                                                .add_sized(
+                                                                    [text_width, 44.0],
+                                                                    TextEdit::singleline(
+                                                                        &mut task.text,
+                                                                    )
+                                                                    .id(egui::Id::new((
+                                                                        "checklist-text",
+                                                                        task.id,
+                                                                    )))
+                                                                    .font(FontId::proportional(
+                                                                        16.0,
+                                                                    ))
+                                                                    .text_color(ink)
+                                                                    .vertical_align(
+                                                                        egui::Align::Center,
+                                                                    )
+                                                                    .frame(false)
+                                                                    .layouter(&mut layouter),
+                                                                )
+                                                                .changed();
+                                                            let delete_button = if compact {
+                                                                controls::button_with_text(
+                                                                    ui, "Hapus", "",
+                                                                )
+                                                            } else {
+                                                                controls::button(ui, "Hapus")
+                                                            };
+                                                            let response = ui
+                                                                .add_sized(
+                                                                    [delete_width, 44.0],
+                                                                    delete_button,
+                                                                )
+                                                                .on_hover_text("Hapus tugas");
+                                                            response.widget_info(|| {
+                                                                egui::WidgetInfo::labeled(
+                                                                    egui::WidgetType::Button,
+                                                                    ui.is_enabled(),
+                                                                    "Hapus tugas",
+                                                                )
+                                                            });
+                                                            ui.ctx().data_mut(|data| {
+                                                                data.insert_temp(
+                                                                    egui::Id::new((
+                                                                        "checklist-delete",
+                                                                        task.id,
+                                                                    )),
+                                                                    response.id,
+                                                                )
+                                                            });
+                                                            if response.clicked() {
+                                                                delete = Some(task.id);
+                                                            }
+                                                        });
+                                                    });
+                                                ui.ctx().data_mut(|data| {
+                                                    data.insert_temp(
+                                                        egui::Id::new(("checklist-row", task.id)),
+                                                        card.response.rect,
+                                                    )
+                                                });
+                                                ui.add_space(4.0);
+                                            });
+                                        }
+                                    });
                             });
-                        ui.ctx().data_mut(|data| {
-                            data.insert_temp(
-                                egui::Id::new(("checklist-row", task.id)),
-                                card.response.rect,
-                            )
                         });
-                        ui.add_space(4.0);
-                    });
-                }
-            });
+                },
+            );
+        });
         if let Some(id) = delete {
             self.workspace.documents[index].tasks.retain(|t| t.id != id);
             immediate = true;
@@ -1104,7 +1530,7 @@ impl Notvas {
     }
 
     fn kanban(&mut self, ui: &mut egui::Ui, index: usize) {
-        self.task_input(ui, index);
+        self.task_input(ui, index, false);
         ui.add_space(20.0);
         let titles = ["Rencana", "Dikerjakan", "Selesai"];
         let mut changed = false;
@@ -1325,27 +1751,16 @@ impl Notvas {
             });
         self.header(ctx);
         let shell = ctx.available_rect().shrink(f32::from(SHELL_INSET));
-        let note_paper = if self.kind == Kind::Note && !self.notes_board.overview {
-            self.workspace
-                .documents
-                .iter()
-                .find(|doc| Some(doc.id) == self.selected)
-                .map(|doc| {
-                    Color32::from_rgb(doc.note_color[0], doc.note_color[1], doc.note_color[2])
-                })
-        } else {
-            None
-        };
         let main = egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(note_paper.unwrap_or(Color32::WHITE))
+                    .fill(Color32::WHITE)
                     .outer_margin(SHELL_INSET)
                     .corner_radius(SHELL_RADIUS)
-                    .inner_margin(if note_paper.is_some() { 0 } else { 8 }),
+                    .inner_margin(8),
             )
             .show(ctx, |ui| {
-                if self.kind != Kind::Canvas && note_paper.is_none() {
+                if self.kind == Kind::Kanban {
                     paint_grid(ui.painter(), ui.max_rect());
                 }
                 if let Some(error) = self.error.clone() {
@@ -1483,16 +1898,314 @@ impl Notvas {
     }
 }
 
+const LIST_INDENT: f32 = 28.0;
+
+fn layout_note(
+    ui: &egui::Ui,
+    doc: &RichDocument,
+    width: f32,
+    spacing: f32,
+    default_align: model::TextAlign,
+) -> std::sync::Arc<egui::Galley> {
+    layout_note_with_highlight(ui, doc, width, spacing, default_align, None)
+}
+
+fn shift_placed_row_x(placed_row: &mut egui::epaint::text::PlacedRow, offset_x: f32) {
+    if offset_x <= 0.0 {
+        return;
+    }
+    let row = std::sync::Arc::make_mut(&mut placed_row.row);
+    for glyph in &mut row.glyphs {
+        glyph.pos.x += offset_x;
+    }
+    for vertex in &mut row.visuals.mesh.vertices {
+        vertex.pos.x += offset_x;
+    }
+    if row.visuals.mesh_bounds.is_finite() {
+        row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(egui::vec2(offset_x, 0.0));
+    }
+    row.size.x += offset_x;
+}
+
+fn layout_paragraph_job(
+    doc: &RichDocument,
+    chars: &[char],
+    range: std::ops::Range<usize>,
+    wrap_width: f32,
+    image_width: f32,
+    spacing: f32,
+    highlight: Option<&std::ops::Range<usize>>,
+    justify: bool,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap_width;
+    job.justify = justify;
+    if range.is_empty() {
+        let style = doc
+            .styles
+            .get(range.start)
+            .or_else(|| range.start.checked_sub(1).and_then(|i| doc.styles.get(i)))
+            .copied()
+            .unwrap_or_default();
+        append_run_hl(&mut job, "", style, spacing, false);
+        return job;
+    }
+    let mut run = String::new();
+    let mut current = doc.styles.get(range.start).copied().unwrap_or_default();
+    let mut current_hl = highlight.is_some_and(|r| r.contains(&range.start));
+    for i in range {
+        let ch = chars[i];
+        let style = doc.styles.get(i).copied().unwrap_or_default();
+        let hl = highlight.is_some_and(|r| r.contains(&i));
+        if ch == model::IMAGE_MARKER {
+            if !run.is_empty() {
+                append_run_hl(&mut job, &run, current, spacing, current_hl);
+                run.clear();
+            }
+            let image = doc.images.iter().find(|image| image.anchor == i);
+            let height = image
+                .filter(|image| image.layout == model::ImageLayout::Text)
+                .map_or(style.size * spacing, |image| {
+                    image.display_size(image_width).y + 12.0
+                });
+            job.append(
+                &ch.to_string(),
+                0.0,
+                egui::TextFormat {
+                    font_id: FontId::proportional(1.0),
+                    color: Color32::TRANSPARENT,
+                    line_height: Some(height),
+                    extra_letter_spacing: if image
+                        .is_some_and(|image| image.layout == model::ImageLayout::Text)
+                    {
+                        image_width.max(1.0) - 2.0
+                    } else {
+                        0.0
+                    },
+                    ..Default::default()
+                },
+            );
+            continue;
+        }
+        if (style != current || hl != current_hl) && !run.is_empty() {
+            append_run_hl(&mut job, &run, current, spacing, current_hl);
+            run.clear();
+        }
+        current = style;
+        current_hl = hl;
+        run.push(ch);
+    }
+    if !run.is_empty() {
+        append_run_hl(&mut job, &run, current, spacing, current_hl);
+    }
+    job
+}
+
+fn layout_note_with_highlight(
+    ui: &egui::Ui,
+    doc: &RichDocument,
+    width: f32,
+    spacing: f32,
+    default_align: model::TextAlign,
+    highlight: Option<&std::ops::Range<usize>>,
+) -> std::sync::Arc<egui::Galley> {
+    let full_job = layout_job_with_highlight(doc, width, spacing, highlight);
+    let has_list = doc
+        .text
+        .lines()
+        .any(|line| model::visual_list_prefix(line).is_some());
+    let has_non_left = default_align != model::TextAlign::Left
+        || doc
+            .styles
+            .iter()
+            .any(|style| style.align != model::TextAlign::Left);
+    if (!has_non_left && !has_list) || !width.is_finite() || width <= 1.0 {
+        return ui.fonts_mut(|fonts| fonts.layout_job(full_job));
+    }
+    let chars: Vec<char> = doc.text.chars().collect();
+    let mut para_ranges = Vec::new();
+    let mut start = 0;
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch == '\n' {
+            para_ranges.push(start..i);
+            start = i + 1;
+        }
+    }
+    para_ranges.push(start..chars.len());
+
+    let mut para_galleys = Vec::with_capacity(para_ranges.len());
+    for range in para_ranges {
+        let is_image_para =
+            !range.is_empty() && chars.get(range.start) == Some(&model::IMAGE_MARKER);
+        let align = doc
+            .styles
+            .get(range.start)
+            .map_or(default_align, |style| style.align);
+        let parsed_list = if !is_image_para && !range.is_empty() {
+            let para_line: String = chars[range.clone()].iter().collect();
+            model::visual_list_prefix(&para_line)
+        } else {
+            None
+        };
+        let list_indent = parsed_list
+            .as_ref()
+            .filter(|parsed| {
+                (parsed.indent_chars == 0 || parsed.kind == model::ListKind::Bullet)
+                    && width > LIST_INDENT * 2.5
+            })
+            .map_or(0.0, |_| LIST_INDENT);
+
+        let mut para_galley = match align {
+            model::TextAlign::Left | model::TextAlign::Justify if !is_image_para => {
+                let justify = align == model::TextAlign::Justify;
+                if let Some(parsed) = parsed_list {
+                    let first_wrap = (width - list_indent).max(40.0);
+                    let job = layout_paragraph_job(
+                        doc,
+                        &chars,
+                        range.clone(),
+                        first_wrap,
+                        width,
+                        spacing,
+                        highlight,
+                        justify,
+                    );
+                    let mut g = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                    let prefix_width = g
+                        .rows
+                        .first()
+                        .and_then(|r| {
+                            r.row
+                                .glyphs
+                                .get(parsed.prefix_chars)
+                                .map(|glyph| glyph.pos.x)
+                                .or_else(|| {
+                                    r.row
+                                        .glyphs
+                                        .get(parsed.prefix_chars.saturating_sub(1))
+                                        .map(|glyph| glyph.max_x())
+                                })
+                        })
+                        .unwrap_or(18.0);
+                    let hanging_indent = list_indent + prefix_width;
+                    if g.rows.len() > 1 && width > hanging_indent + 40.0 {
+                        let wrap = (width - hanging_indent).max(40.0);
+                        let rewrapped = layout_paragraph_job(
+                            doc, &chars, range, wrap, width, spacing, highlight, justify,
+                        );
+                        g = ui.fonts_mut(|fonts| fonts.layout_job(rewrapped));
+                    }
+                    if list_indent > 0.0 || (g.rows.len() > 1 && hanging_indent > 0.0) {
+                        let g_mut = std::sync::Arc::make_mut(&mut g);
+                        let mut rect = egui::Rect::ZERO;
+                        let mut mesh_bounds = egui::Rect::NOTHING;
+                        for (row_idx, placed_row) in g_mut.rows.iter_mut().enumerate() {
+                            let target_indent = if row_idx == 0 {
+                                list_indent
+                            } else {
+                                hanging_indent
+                            };
+                            let offset_x = if justify {
+                                target_indent
+                            } else {
+                                let content_width = placed_row
+                                    .row
+                                    .glyphs
+                                    .iter()
+                                    .rposition(|glyph| !glyph.chr.is_whitespace())
+                                    .map_or(0.0, |idx| placed_row.row.glyphs[idx].max_x());
+                                target_indent.min((width - content_width).max(0.0))
+                            };
+                            shift_placed_row_x(placed_row, offset_x);
+                            rect |= placed_row.rect();
+                            mesh_bounds |= placed_row
+                                .row
+                                .visuals
+                                .mesh_bounds
+                                .translate(placed_row.pos.to_vec2());
+                        }
+                        g_mut.rect = rect;
+                        g_mut.mesh_bounds = mesh_bounds;
+                    }
+                    g
+                } else {
+                    let job = layout_paragraph_job(
+                        doc, &chars, range, width, width, spacing, highlight, justify,
+                    );
+                    ui.fonts_mut(|fonts| fonts.layout_job(job))
+                }
+            }
+            model::TextAlign::Center | model::TextAlign::Right if !is_image_para => {
+                let job = layout_paragraph_job(
+                    doc, &chars, range, width, width, spacing, highlight, false,
+                );
+                let mut g = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                let g_mut = std::sync::Arc::make_mut(&mut g);
+                let mut rect = egui::Rect::ZERO;
+                let mut mesh_bounds = egui::Rect::NOTHING;
+                for placed_row in &mut g_mut.rows {
+                    let content_width = placed_row
+                        .row
+                        .glyphs
+                        .iter()
+                        .rposition(|glyph| !glyph.chr.is_whitespace())
+                        .map_or(0.0, |idx| placed_row.row.glyphs[idx].max_x());
+                    let offset_x = match align {
+                        model::TextAlign::Center => ((width - content_width) * 0.5).max(0.0),
+                        model::TextAlign::Right => (width - content_width).max(0.0),
+                        _ => 0.0,
+                    };
+                    shift_placed_row_x(placed_row, offset_x);
+                    rect |= placed_row.rect();
+                    mesh_bounds |= placed_row
+                        .row
+                        .visuals
+                        .mesh_bounds
+                        .translate(placed_row.pos.to_vec2());
+                }
+                g_mut.rect = rect;
+                g_mut.mesh_bounds = mesh_bounds;
+                g
+            }
+            _ => {
+                let job = layout_paragraph_job(
+                    doc, &chars, range, width, width, spacing, highlight, false,
+                );
+                ui.fonts_mut(|fonts| fonts.layout_job(job))
+            }
+        };
+        let _ = &mut para_galley;
+        para_galleys.push(para_galley);
+    }
+
+    std::sync::Arc::new(egui::Galley::concat(
+        std::sync::Arc::new(full_job),
+        &para_galleys,
+        ui.ctx().pixels_per_point(),
+    ))
+}
+
 fn layout_job(doc: &RichDocument, width: f32, spacing: f32) -> egui::text::LayoutJob {
+    layout_job_with_highlight(doc, width, spacing, None)
+}
+
+fn layout_job_with_highlight(
+    doc: &RichDocument,
+    width: f32,
+    spacing: f32,
+    highlight: Option<&std::ops::Range<usize>>,
+) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = width;
     let mut run = String::new();
     let mut current = doc.styles.first().copied().unwrap_or_default();
+    let mut current_hl = highlight.is_some_and(|r| r.contains(&0));
     for (i, ch) in doc.text.chars().enumerate() {
         let style = doc.styles.get(i).copied().unwrap_or_default();
+        let hl = highlight.is_some_and(|r| r.contains(&i));
         if ch == model::IMAGE_MARKER {
             if !run.is_empty() {
-                append_run(&mut job, &run, current, spacing);
+                append_run_hl(&mut job, &run, current, spacing, current_hl);
                 run.clear();
             }
             let image = doc.images.iter().find(|image| image.anchor == i);
@@ -1520,20 +2233,27 @@ fn layout_job(doc: &RichDocument, width: f32, spacing: f32) -> egui::text::Layou
             );
             continue;
         }
-        if style != current && !run.is_empty() {
-            append_run(&mut job, &run, current, spacing);
+        if (style != current || hl != current_hl) && !run.is_empty() {
+            append_run_hl(&mut job, &run, current, spacing, current_hl);
             run.clear();
         }
         current = style;
+        current_hl = hl;
         run.push(ch);
     }
     if !run.is_empty() {
-        append_run(&mut job, &run, current, spacing);
+        append_run_hl(&mut job, &run, current, spacing, current_hl);
     }
     job
 }
 
-fn append_run(job: &mut egui::text::LayoutJob, text: &str, style: TextStyle, spacing: f32) {
+fn append_run_hl(
+    job: &mut egui::text::LayoutJob,
+    text: &str,
+    style: TextStyle,
+    spacing: f32,
+    highlighted: bool,
+) {
     job.append(
         text,
         0.0,
@@ -1547,6 +2267,11 @@ fn append_run(job: &mut egui::text::LayoutJob, text: &str, style: TextStyle, spa
                 },
             ),
             color: TEXT,
+            background: if highlighted {
+                BUTTON_ACTIVE
+            } else {
+                Color32::TRANSPARENT
+            },
             italics: style.italic,
             underline: if style.underline {
                 Stroke::new(1.0_f32, TEXT)
@@ -1588,13 +2313,22 @@ fn configure(ctx: &egui::Context) {
     ctx.options_mut(|options| options.zoom_with_keyboard = false);
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
+        "quicksand-regular".into(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/Quicksand-Regular.ttf")).into(),
+    );
+    fonts.font_data.insert(
+        "quicksand-bold".into(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/Quicksand-Bold.ttf")).into(),
+    );
+    fonts.font_data.insert(
         "patrick-hand".into(),
         egui::FontData::from_static(include_bytes!("../assets/fonts/PatrickHand-Regular.ttf"))
             .into(),
     );
-    fonts
-        .families
-        .insert(FontFamily::Name("hand".into()), vec!["patrick-hand".into()]);
+    fonts.families.insert(
+        FontFamily::Name("hand".into()),
+        vec!["quicksand-bold".into(), "patrick-hand".into()],
+    );
     for (name, path, family) in [
         (
             "notvas-regular",
@@ -1618,15 +2352,16 @@ fn configure(ctx: &egui::Context) {
                 .insert(0, name.into());
         }
     }
-    if !fonts
+    fonts
         .families
-        .contains_key(&FontFamily::Name("bold".into()))
-    {
-        fonts.families.insert(
-            FontFamily::Name("bold".into()),
-            fonts.families[&FontFamily::Proportional].clone(),
-        );
-    }
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .insert(0, "quicksand-regular".into());
+    let mut bold_chain = fonts.families[&FontFamily::Proportional].clone();
+    bold_chain.insert(0, "quicksand-bold".into());
+    fonts
+        .families
+        .insert(FontFamily::Name("bold".into()), bold_chain);
     ctx.set_fonts(fonts);
     let mut style = (*ctx.style()).clone();
     style.visuals = egui::Visuals::light();
@@ -1663,6 +2398,14 @@ fn configure(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.button_padding = egui::vec2(12.0, 8.0);
     style.spacing.interact_size.y = 32.0;
+    style.spacing.scroll.floating_width = 8.0;
+    style.spacing.scroll.bar_width = 10.0;
+    style.spacing.scroll.dormant_handle_opacity = 0.45;
+    style.spacing.scroll.active_handle_opacity = 0.65;
+    style.spacing.scroll.interact_handle_opacity = 0.85;
+    style.spacing.scroll.dormant_background_opacity = 0.15;
+    style.spacing.scroll.active_background_opacity = 0.25;
+    style.spacing.scroll.interact_background_opacity = 0.4;
     ctx.set_style(style);
 }
 
@@ -2292,8 +3035,24 @@ mod ui_tests {
             .expect("File menu must expose the New action");
         click(&mut app, &ctx, new);
         assert_eq!(app.workspace.documents.len(), 2);
-        let title = ctx
+        let header_title = ctx
             .read_response(egui::Id::new("header-title"))
+            .unwrap()
+            .rect
+            .center();
+        click(&mut app, &ctx, header_title);
+        run(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("Tidak boleh berubah dari header".into())],
+        );
+        assert_eq!(
+            app.workspace.documents.last().unwrap().title,
+            "Canvas baru",
+            "Header title must be read-only"
+        );
+        let title = ctx
+            .read_response(egui::Id::new("canvas-title"))
             .unwrap()
             .rect
             .center();
@@ -3351,6 +4110,9 @@ mod ui_tests {
                 let header = ctx
                     .data(|data| data.get_temp::<egui::Rect>(egui::Id::new("note-header-bounds")))
                     .unwrap();
+                let toolbar = ctx
+                    .data(|data| data.get_temp::<egui::Rect>(egui::Id::new("note-toolbar-bounds")))
+                    .unwrap();
                 let paper = ctx
                     .data(|data| data.get_temp::<egui::Rect>(egui::Id::new("note-paper-bounds")))
                     .unwrap();
@@ -3365,10 +4127,10 @@ mod ui_tests {
                     })
                     .unwrap();
                 assert!(
-                    (paper.left() - main.left()).abs() < 0.5
-                        && (paper.right() - main.right()).abs() < 0.5
-                        && paper.bottom() >= main.bottom() - 0.5,
-                    "Note color must reach the main edges: {paper:?}, main {main:?}"
+                    main.contains_rect(toolbar)
+                        && main.contains_rect(paper)
+                        && toolbar.right() <= paper.left(),
+                    "Toolbar must be separated outside and left of note paper: toolbar {toolbar:?}, paper {paper:?}, main {main:?}"
                 );
                 assert!(paper.contains_rect(header));
                 assert!(
@@ -3546,5 +4308,419 @@ mod ui_tests {
                 .contains(&egui::ViewportCommand::CancelClose)
         );
         fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_long_notes_and_checklists_down_and_up() {
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        let mut app = app();
+        app.kind = Kind::Note;
+        app.create();
+        let long_note = (1..=80)
+            .map(|line| format!("Baris catatan panjang ke-{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.workspace.documents[0]
+            .body
+            .reconcile(long_note, TextStyle::default());
+        let pointer = egui::pos2(420.0, 520.0);
+        let step = |app: &mut Notvas, delta_y: f32| {
+            let mut events = vec![egui::Event::PointerMoved(pointer)];
+            if delta_y != 0.0 {
+                events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, delta_y),
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 820.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            );
+        };
+        step(&mut app, 0.0);
+        let top_note_y = ctx
+            .read_response(egui::Id::new("note-body"))
+            .unwrap()
+            .rect
+            .min
+            .y;
+        step(&mut app, -180.0);
+        for _ in 0..8 {
+            step(&mut app, 0.0);
+        }
+        let scrolled_down_note_y = ctx
+            .read_response(egui::Id::new("note-body"))
+            .unwrap()
+            .rect
+            .min
+            .y;
+        assert!(
+            scrolled_down_note_y < top_note_y - 100.0,
+            "Note should scroll down: {top_note_y} -> {scrolled_down_note_y}"
+        );
+        step(&mut app, 150.0);
+        for _ in 0..8 {
+            step(&mut app, 0.0);
+        }
+        let scrolled_up_note_y = ctx
+            .read_response(egui::Id::new("note-body"))
+            .unwrap()
+            .rect
+            .min
+            .y;
+        assert!(
+            scrolled_up_note_y > scrolled_down_note_y + 80.0,
+            "Note should scroll back up: {scrolled_down_note_y} -> {scrolled_up_note_y}"
+        );
+
+        app.switch_kind(Kind::Checklist);
+        app.create();
+        let first_task_id = app.workspace.id();
+        for index in 0..30 {
+            let id = if index == 0 {
+                first_task_id
+            } else {
+                app.workspace.id()
+            };
+            app.workspace
+                .documents
+                .last_mut()
+                .unwrap()
+                .tasks
+                .push(Task {
+                    id,
+                    text: format!("Tugas panjang ke-{}", index + 1),
+                    detail: String::new(),
+                    done: false,
+                    column: 0,
+                });
+        }
+        step(&mut app, 0.0);
+        let top_task_y = ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("checklist-row", first_task_id))))
+            .unwrap()
+            .min
+            .y;
+        step(&mut app, -200.0);
+        for _ in 0..8 {
+            step(&mut app, 0.0);
+        }
+        let scrolled_down_task_y = ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("checklist-row", first_task_id))))
+            .unwrap()
+            .min
+            .y;
+        assert!(
+            scrolled_down_task_y < top_task_y - 100.0,
+            "Checklist should scroll down: {top_task_y} -> {scrolled_down_task_y}"
+        );
+        step(&mut app, 160.0);
+        for _ in 0..8 {
+            step(&mut app, 0.0);
+        }
+        let scrolled_up_task_y = ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("checklist-row", first_task_id))))
+            .unwrap()
+            .min
+            .y;
+        assert!(
+            scrolled_up_task_y > scrolled_down_task_y + 80.0,
+            "Checklist should scroll back up: {scrolled_down_task_y} -> {scrolled_up_task_y}"
+        );
+    }
+
+    #[test]
+    fn note_text_alignment_left_center_right_justify_and_undo() {
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        let mut app = app();
+        app.kind = Kind::Note;
+        app.create();
+        let text = "Judul Tengah\nRata Kanan\nParagraf panjang untuk menguji fitur rata kiri-kanan atau justify supaya baris pertama yang terbungkus otomatis memenuhi lebar halaman seperti di Microsoft Word.";
+        app.workspace.documents[0]
+            .body
+            .reconcile(text.into(), TextStyle::default());
+        frame(&mut app, &ctx, [640.0, 620.0]);
+        let click = |app: &mut Notvas, at: egui::Pos2| {
+            for pressed in [true, false] {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(640.0, 620.0),
+                        )),
+                        events: vec![
+                            egui::Event::PointerMoved(at),
+                            egui::Event::PointerButton {
+                                pos: at,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ctx| app.draw(ctx),
+                );
+            }
+        };
+        app.selection = 2..2;
+        let center_btn = ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("note-align", "Rata tengah"))))
+            .unwrap()
+            .center();
+        click(&mut app, center_btn);
+        assert_eq!(app.typing.align, model::TextAlign::Center);
+        assert!(
+            app.workspace.documents[0].body.styles[0..=12]
+                .iter()
+                .all(|s| s.align == model::TextAlign::Center)
+        );
+        assert_eq!(
+            app.workspace.documents[0].body.styles[13].align,
+            model::TextAlign::Left
+        );
+
+        app.selection = 15..15;
+        let right_btn = ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("note-align", "Rata kanan"))))
+            .unwrap()
+            .center();
+        click(&mut app, right_btn);
+        assert_eq!(app.typing.align, model::TextAlign::Right);
+        assert!(
+            app.workspace.documents[0].body.styles[13..=23]
+                .iter()
+                .all(|s| s.align == model::TextAlign::Right)
+        );
+
+        app.selection = 28..28;
+        let justify_btn = ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("note-align", "Rata kiri-kanan"))))
+            .unwrap()
+            .center();
+        click(&mut app, justify_btn);
+        assert_eq!(app.typing.align, model::TextAlign::Justify);
+        assert!(
+            app.workspace.documents[0].body.styles[24..]
+                .iter()
+                .all(|s| s.align == model::TextAlign::Justify)
+        );
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 620.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let galley = layout_note(
+                        ui,
+                        &app.workspace.documents[0].body,
+                        400.0,
+                        1.5,
+                        app.typing.align,
+                    );
+                    assert!(galley.rows.len() >= 4);
+                    let row0_left = galley.rows[0].glyphs.first().unwrap().pos.x;
+                    let row1_left = galley.rows[1].glyphs.first().unwrap().pos.x;
+                    let row1_right = galley.rows[1].glyphs.last().unwrap().max_x();
+                    let row2_left = galley.rows[2].glyphs.first().unwrap().pos.x;
+                    let row2_right = galley.rows[2]
+                        .glyphs
+                        .iter()
+                        .rfind(|g| !g.chr.is_whitespace())
+                        .unwrap()
+                        .max_x();
+                    assert!(row0_left > 80.0, "Centered row left={row0_left}");
+                    assert!(
+                        row1_left > row0_left && (row1_right - 400.0).abs() < 2.0,
+                        "Right-aligned row left={row1_left}, right={row1_right}"
+                    );
+                    assert!(
+                        row2_left < 2.0 && (row2_right - 400.0).abs() < 4.0,
+                        "Justified row left={row2_left}, right={row2_right}"
+                    );
+                });
+            },
+        );
+        let html = app.workspace.documents[0].body.html("Uji Perataan", 1.5);
+        assert!(html.contains("text-align:center"));
+        assert!(html.contains("text-align:right"));
+        assert!(html.contains("text-align:justify"));
+
+        app.history(false);
+        assert!(
+            app.workspace.documents[0].body.styles[24..]
+                .iter()
+                .all(|s| s.align == model::TextAlign::Left)
+        );
+
+        let image_id = app.workspace.documents[0].body.insert_image(
+            0,
+            model::test_image(),
+            "foto.png".into(),
+            TextStyle::default(),
+        );
+        app.note_images.selected = Some(image_id);
+        app.selection = 20..20;
+        frame(&mut app, &ctx, [640.0, 620.0]);
+        let left_x = ctx
+            .read_response(
+                egui::Id::new("note-scroll")
+                    .with(app.workspace.documents[0].id)
+                    .with(("note-image", image_id)),
+            )
+            .map(|r| r.rect.left());
+        click(&mut app, center_btn);
+        assert_eq!(
+            app.workspace.documents[0].body.images[0].align,
+            model::TextAlign::Center
+        );
+        click(&mut app, right_btn);
+        assert_eq!(
+            app.workspace.documents[0].body.images[0].align,
+            model::TextAlign::Right
+        );
+        app.workspace.documents[0].body.images[0].width = 160.0;
+        app.workspace.documents[0].body.images[0].layout = model::ImageLayout::Overlay;
+        click(&mut app, center_btn);
+        assert!(app.workspace.documents[0].body.images[0].offset[0] > 40.0);
+        let _ = left_x;
+    }
+
+    #[test]
+    fn list_indent_only_affects_numbered_and_bullet_paragraphs() {
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        let mut doc = RichDocument::default();
+        let text = concat!(
+            "Paragraf pembuka biasa tanpa penomoran\n",
+            "1. Item pertama yang sangat panjang sekali sampai pasti membungkus ke baris kedua di kertas catatan\n",
+            "2. Item kedua\n",
+            "• Poin bullet\n",
+            "- Teks strip mentah\n",
+            "Paragraf penutup biasa yang juga panjang sekali supaya kita pastikan lebar wrap penuh tetap terjaga"
+        );
+        doc.reconcile(text.into(), TextStyle::default());
+        let last_para_start = text[..text.rfind('\n').unwrap() + 1].chars().count();
+        doc.apply_align(
+            last_para_start..text.chars().count(),
+            model::TextAlign::Justify,
+        );
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 620.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let width = 360.0;
+                    let galley = layout_note(ui, &doc, width, 1.5, model::TextAlign::Left);
+                    assert_eq!(galley.text(), text);
+                    let row_texts: Vec<String> = galley.rows.iter().map(|r| r.text()).collect();
+                    let row_lefts: Vec<f32> = galley
+                        .rows
+                        .iter()
+                        .map(|r| r.glyphs.first().map_or(0.0, |g| g.pos.x))
+                        .collect();
+
+                    // Row 0: normal opening paragraph -> NOT indented (x == 0)
+                    assert!(
+                        row_lefts[0] < 1.0,
+                        "Opening normal text was indented! left={} text={:?}",
+                        row_lefts[0],
+                        row_texts[0]
+                    );
+
+                    // Row 1: "1. Item pertama..." -> indented by LIST_INDENT (28px)
+                    let idx_num1 = row_texts
+                        .iter()
+                        .position(|t| t.starts_with("1. Item"))
+                        .expect("missing 1. row");
+                    assert!(
+                        (row_lefts[idx_num1] - LIST_INDENT).abs() < 1.0,
+                        "1. row left={} expected={LIST_INDENT}",
+                        row_lefts[idx_num1]
+                    );
+                    // Wrapped continuation row of "1. Item..." -> hanging indent > LIST_INDENT
+                    let idx_num2 = row_texts
+                        .iter()
+                        .position(|t| t.starts_with("2. Item"))
+                        .expect("missing 2. row");
+                    assert!(
+                        idx_num2 > idx_num1 + 1,
+                        "1. item should have wrapped into continuation row: {row_texts:?}"
+                    );
+                    assert!(
+                        row_lefts[idx_num1 + 1] > LIST_INDENT + 8.0,
+                        "Continuation row should have hanging indent, got left={}",
+                        row_lefts[idx_num1 + 1]
+                    );
+                    // Row "2. Item kedua" -> indented by LIST_INDENT
+                    assert!(
+                        (row_lefts[idx_num2] - LIST_INDENT).abs() < 1.0,
+                        "2. row left={}",
+                        row_lefts[idx_num2]
+                    );
+                    // Row "• Poin bullet" -> indented by LIST_INDENT
+                    let idx_bullet = row_texts
+                        .iter()
+                        .position(|t| t.starts_with('•'))
+                        .expect("missing bullet row");
+                    assert!(
+                        (row_lefts[idx_bullet] - LIST_INDENT).abs() < 1.0,
+                        "bullet row left={}",
+                        row_lefts[idx_bullet]
+                    );
+                    // Row "- Teks strip mentah" (raw pasted dash, not '•') -> NOT indented
+                    let idx_raw_dash = row_texts
+                        .iter()
+                        .position(|t| t.starts_with("- Teks"))
+                        .expect("missing raw dash row");
+                    assert!(
+                        row_lefts[idx_raw_dash] < 1.0,
+                        "Raw pasted dash should not be auto-indented, left={}",
+                        row_lefts[idx_raw_dash]
+                    );
+                    // Closing normal justified paragraph -> starts at x=0 and spans full width (~360px)!
+                    let idx_closing = row_texts
+                        .iter()
+                        .position(|t| t.starts_with("Paragraf penutup"))
+                        .expect("missing closing row");
+                    assert!(
+                        row_lefts[idx_closing] < 1.0,
+                        "Closing normal text was indented! left={}",
+                        row_lefts[idx_closing]
+                    );
+                    let closing_right = galley.rows[idx_closing]
+                        .glyphs
+                        .iter()
+                        .rfind(|g| !g.chr.is_whitespace())
+                        .unwrap()
+                        .max_x();
+                    assert!(
+                        (closing_right - width).abs() < 4.0,
+                        "Closing non-list justified paragraph should use full width {width}, got right={closing_right}"
+                    );
+                });
+            },
+        );
     }
 }

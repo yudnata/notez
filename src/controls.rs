@@ -18,6 +18,10 @@ fn icon_path(label: &str) -> &'static str {
             "M12 3a9 9 0 0 0 0 18h2a2 2 0 0 0 0-4h-1a2 2 0 0 1 0-4h5a3 3 0 0 0 3-3 9 9 0 0 0-9-7M7 9h.01M11 6h.01m5 2h.01M6 14h.01"
         }
         "Gambar..." => "M3 3h18v18H3zm0 14 5-5 4 4 4-6 5 7M8 7h.01",
+        "Rata kiri" => "M4 6h16M4 10h10M4 14h16M4 18h10",
+        "Rata tengah" => "M4 6h16M7 10h10M4 14h16M7 18h10",
+        "Rata kanan" => "M4 6h16M10 10h10M4 14h16M10 18h10",
+        "Rata kiri-kanan" => "M4 6h16M4 10h16M4 14h16M4 18h16",
         "Salin lokasi" => "M8 8h13v13H8zM3 16V3h13",
         "Template" => "M3 3h18v18H3zm0 6h18M10 9v12",
         "Ke depan" => "M8 8h13v13H8zM3 16V3h13",
@@ -56,6 +60,34 @@ fn icon_path(label: &str) -> &'static str {
 
 pub fn button(ui: &Ui, label: &str) -> Button<'static> {
     button_with_text(ui, label, label.trim_start_matches("+ ").to_owned())
+}
+
+pub fn icon_button(ui: &Ui, label: &str, selected: bool) -> Button<'static> {
+    let path = icon_path(label);
+    let key = egui::Id::new(("action-icon", path));
+    let cached = ui.ctx().data(|d| d.get_temp::<TextureHandle>(key));
+    let texture = cached.unwrap_or_else(|| {
+        let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="{path}" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>"#);
+        let tree = resvg::usvg::Tree::from_str(&svg, &resvg::usvg::Options::default())
+            .expect("Static action icon must be valid SVG");
+        let mut pixels = resvg::tiny_skia::Pixmap::new(48, 48).unwrap();
+        resvg::render(
+            &tree,
+            resvg::tiny_skia::Transform::from_scale(2.0, 2.0),
+            &mut pixels.as_mut(),
+        );
+        let image = ColorImage::from_rgba_premultiplied([48, 48], pixels.data());
+        let texture = ui.ctx().load_texture(
+            format!("action-icon-{key:?}"),
+            image,
+            egui::TextureOptions::LINEAR,
+        );
+        ui.ctx().data_mut(|d| d.insert_temp(key, texture.clone()));
+        texture
+    });
+    Button::image((texture.id(), egui::vec2(15.0, 15.0)))
+        .image_tint_follows_text_color(true)
+        .selected(selected)
 }
 
 pub fn button_with_text(ui: &Ui, label: &str, text: impl Into<WidgetText>) -> Button<'static> {
@@ -107,7 +139,7 @@ pub fn task_checkbox(ui: &mut Ui, checked: &mut bool, label: &str) -> egui::Resp
             let fill = if *checked {
                 crate::TEXT
             } else {
-                egui::Color32::WHITE
+                egui::Color32::TRANSPARENT
             };
             let ink = if *checked {
                 egui::Color32::WHITE
@@ -122,7 +154,7 @@ pub fn task_checkbox(ui: &mut Ui, checked: &mut bool, label: &str) -> egui::Resp
             ] {
                 widget.corner_radius = egui::CornerRadius::same(6);
                 widget.bg_fill = fill;
-                widget.bg_stroke = egui::Stroke::new(1.5_f32, egui::Color32::from_gray(115));
+                widget.bg_stroke = egui::Stroke::new(1.5_f32, egui::Color32::from_black_alpha(135));
                 widget.fg_stroke = egui::Stroke::new(2.3_f32, ink);
             }
             let response = ui.add_sized([44.0, 44.0], egui::Checkbox::without_text(checked));

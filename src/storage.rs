@@ -57,9 +57,19 @@ pub fn save(path: &Path, workspace: &Workspace) -> Result<(), String> {
         file.sync_all()?;
         drop(file);
         if path.exists() {
-            fs::copy(path, path.with_extension("notvas.bak"))?;
+            let backup = path.with_extension("notvas.bak");
+            let _ = fs::remove_file(&backup);
+            if fs::rename(path, &backup).is_err() {
+                fs::copy(path, &backup)?;
+            }
         }
-        fs::rename(&temporary, path)?;
+        if let Err(err) = fs::rename(&temporary, path) {
+            let backup = path.with_extension("notvas.bak");
+            if !path.exists() && backup.exists() {
+                let _ = fs::rename(&backup, path);
+            }
+            return Err(err);
+        }
         Ok(())
     })();
     if let Err(e) = result {

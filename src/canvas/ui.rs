@@ -102,7 +102,7 @@ pub struct CanvasEditor {
     drag: Option<Drag>,
     editing: Option<u64>,
     focus_text: bool,
-    textures: HashMap<u64, egui::TextureHandle>,
+    textures: HashMap<(usize, usize), TextureSlot>,
     ruler: bool,
     last_rect: Option<Rect>,
     shape_geometry: Vec<(u64, Point, Point)>,
@@ -215,7 +215,11 @@ impl CanvasEditor {
     }
 
     pub fn reset(&mut self) {
-        *self = Self::default();
+        let textures = std::mem::take(&mut self.textures);
+        *self = Self {
+            textures,
+            ..Self::default()
+        };
     }
 
     fn checkpoint(&mut self, data: &CanvasData) {
@@ -246,7 +250,6 @@ impl CanvasEditor {
             self.selected.retain(|id| data.element(*id).is_some());
             self.editing = None;
             self.drag = None;
-            self.textures.clear();
             self.shape_geometry = shape_geometry(data);
             true
         } else {
@@ -1725,38 +1728,35 @@ impl CanvasEditor {
                 Vec2::new(e.size[0], e.size[1]) * view.zoom,
             );
             if e.kind == ElementKind::Image {
-                if !self.textures.contains_key(&e.id) {
-                    if let Some(image) = &e.image {
-                        match image::load_from_memory(image.bytes.as_slice()) {
-                            Ok(decoded) => {
-                                let rgba = decoded.to_rgba8();
-                                let image = egui::ColorImage::from_rgba_unmultiplied(
-                                    [rgba.width() as usize, rgba.height() as usize],
-                                    rgba.as_raw(),
-                                );
-                                self.textures.insert(
-                                    e.id,
-                                    painter.ctx().load_texture(
-                                        format!("canvas-image-{}", e.id),
-                                        image,
-                                        egui::TextureOptions::LINEAR,
-                                    ),
-                                );
-                            }
-                            Err(_) => {
-                                self.error =
-                                    Some("Salah satu gambar tersimpan tidak dapat dibaca.".into());
-                            }
+                if let Some(image) = &e.image {
+                    if self.textures.len() >= 64 {
+                        self.textures.retain(|k, _| {
+                            data.elements.iter().any(|el| {
+                                el.image.as_ref().is_some_and(|img| img.cache_key() == *k)
+                            })
+                        });
+                    }
+                    match image.poll_texture(
+                        &mut self.textures,
+                        painter.ctx(),
+                        &format!("canvas-image-{}", e.id),
+                    ) {
+                        TextureSlot::Loading(_) => {
+                            paint_image_loading(painter, painter.ctx(), rect);
+                        }
+                        TextureSlot::Ready(texture) => {
+                            painter.image(
+                                texture.id(),
+                                rect,
+                                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        }
+                        TextureSlot::Failed(_) => {
+                            self.error =
+                                Some("Salah satu gambar tersimpan tidak dapat dibaca.".into());
                         }
                     }
-                }
-                if let Some(texture) = self.textures.get(&e.id) {
-                    painter.image(
-                        texture.id(),
-                        rect,
-                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
                 }
             } else if e.kind.has_path() {
                 let points = if e.kind == ElementKind::Arrow {

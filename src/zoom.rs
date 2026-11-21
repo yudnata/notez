@@ -1,3 +1,4 @@
+use crate::navigation::PanScrollArea;
 use egui::{LayerId, Rect, Ui, UiBuilder, emath::TSTransform};
 
 pub fn show<R>(ui: &mut Ui, zoom: &mut f32, contents: impl FnOnce(&mut Ui) -> R) -> R {
@@ -35,7 +36,7 @@ pub fn show<R>(ui: &mut Ui, zoom: &mut f32, contents: impl FnOnce(&mut Ui) -> R)
         egui::ScrollArea::both()
             .id_salt("zoom-overflow")
             .auto_shrink([false, false])
-            .show(&mut child, |ui| {
+            .show_pannable(&mut child, [true, true], |ui| {
                 ui.allocate_ui_with_layout(
                     local_size.max(egui::vec2(320.0, 600.0)),
                     egui::Layout::top_down(egui::Align::Min),
@@ -122,5 +123,25 @@ mod tests {
         let (_, _, offset) = run(vec![egui::Event::PointerMoved(to)]);
         assert!((offset.y - 60.0).abs() < 0.01, "{offset:?}");
         run(vec![button(to, egui::PointerButton::Secondary, false)]);
+        run(vec![
+            egui::Event::PointerMoved(from),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -6.0),
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let (_, _, offset) = run(vec![]);
+        assert!((offset.y - 64.0).abs() < 0.01, "{offset:?}");
+        run(vec![
+            egui::Event::PointerMoved(from),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 6.0),
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let (_, _, offset) = run(vec![]);
+        assert!((offset.y - 60.0).abs() < 0.01, "{offset:?}");
     }
 }

@@ -79,42 +79,46 @@ impl Notvas {
                                 }
                                 _ => None,
                             };
-                            let title_width = (ui.available_width() - 24.0).clamp(40.0, 420.0);
-                            let changed = if let Some(title) = board_title {
+                            let drag_rect = ui.max_rect();
+                            if let Some(title) = board_title {
                                 ui.add(
                                     egui::Label::new(RichText::new(title).size(18.0))
                                         .halign(egui::Align::Min)
+                                        .selectable(false)
                                         .truncate(),
                                 );
-                                false
                             } else if let Some(doc) = self
                                 .workspace
                                 .documents
-                                .iter_mut()
+                                .iter()
                                 .find(|d| Some(d.id) == self.selected)
                             {
-                                ui.add(
-                                    TextEdit::singleline(&mut doc.title)
-                                        .id(egui::Id::new("header-title"))
-                                        .font(FontId::proportional(18.0))
-                                        .horizontal_align(egui::Align::Min)
-                                        .frame(false)
-                                        .desired_width(title_width)
-                                        .hint_text("Tanpa judul"),
-                                )
-                                .changed()
+                                let empty = doc.title.trim().is_empty();
+                                let text = if empty {
+                                    RichText::new("Tanpa judul").size(18.0).color(MUTED)
+                                } else {
+                                    RichText::new(doc.title.as_str()).size(18.0)
+                                };
+                                let response = ui.add(
+                                    egui::Label::new(text)
+                                        .halign(egui::Align::Min)
+                                        .selectable(false)
+                                        .truncate(),
+                                );
+                                ui.interact(
+                                    response.rect,
+                                    egui::Id::new("header-title"),
+                                    egui::Sense::hover(),
+                                );
                             } else {
                                 ui.add(
                                     egui::Label::new(RichText::new(self.kind.label()).size(18.0))
                                         .halign(egui::Align::Min)
+                                        .selectable(false)
                                         .truncate(),
                                 );
-                                false
-                            };
-                            if changed {
-                                self.change();
                             }
-                            window_chrome::drag_area(ui, ui.available_rect_before_wrap());
+                            window_chrome::drag_area(ui, drag_rect);
                         },
                     );
                     ui.allocate_ui_with_layout(

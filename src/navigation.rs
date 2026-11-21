@@ -99,6 +99,7 @@ impl PanScrollArea for ScrollArea {
             i.pointer.secondary_down() || i.pointer.button_released(PointerButton::Secondary)
         });
         let mut output = self
+            .animated(false)
             .scroll_source(egui::scroll_area::ScrollSource {
                 drag: touch.is_none() && !right,
                 ..Default::default()
@@ -113,6 +114,44 @@ impl PanScrollArea for ScrollArea {
                 && layer_visible_at(ui, t.start_pos)
         }) {
             delta += local_delta(ui, touch.translation_delta);
+        }
+        let wheel_hover = ui
+            .input(|i| i.pointer.hover_pos().or_else(|| i.pointer.interact_pos()))
+            .is_some_and(|p| {
+                let local = local_pointer(ui, p);
+                let visible_rect = output.inner_rect.intersect(ui.clip_rect());
+                let in_bounds = if axes == [false, true] {
+                    ui.clip_rect().contains(local) && visible_rect.x_range().contains(local.x)
+                } else {
+                    visible_rect.contains(local)
+                };
+                in_bounds && layer_visible_at(ui, p)
+            });
+        if ui.is_enabled() && ui.ctx().dragged_id().is_none() && wheel_hover {
+            let always_only = ui.style().always_scroll_the_only_direction && axes[0] != axes[1];
+            let wheel = local_delta(ui, ui.ctx().input(|i| i.smooth_scroll_delta));
+            for axis in 0..2 {
+                if axes[axis] {
+                    let scroll = if always_only {
+                        wheel.x + wheel.y
+                    } else {
+                        wheel[axis]
+                    };
+                    let max = (output.content_size[axis] - output.inner_rect.size()[axis]).max(0.0);
+                    let scrolling_up = output.state.offset[axis] > 0.0 && scroll > 0.0;
+                    let scrolling_down = output.state.offset[axis] < max && scroll < 0.0;
+                    if scrolling_up || scrolling_down {
+                        delta[axis] += scroll;
+                        ui.ctx().input_mut(|i| {
+                            if always_only {
+                                i.smooth_scroll_delta = Vec2::ZERO;
+                            } else {
+                                i.smooth_scroll_delta[axis] = 0.0;
+                            }
+                        });
+                    }
+                }
+            }
         }
         for axis in 0..2 {
             if axes[axis] && delta[axis] != 0.0 {

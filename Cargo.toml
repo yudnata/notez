@@ -28,3 +28,6 @@ strip = true
 debug = 0
 incremental = true
 
+[profile.dev.package."*"]
+opt-level = 2
+

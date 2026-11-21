@@ -234,10 +234,17 @@ pub fn note_palette(ui: &mut egui::Ui, selected: &mut [u8; 3]) -> bool {
     changed
 }
 
-fn checklist_preview(painter: &egui::Painter, rect: Rect, clip: Rect, doc: &Document, zoom: f32) {
+fn checklist_preview(
+    painter: &egui::Painter,
+    rect: Rect,
+    clip: Rect,
+    doc: &Document,
+    zoom: f32,
+    body_top: f32,
+) {
     let painter = painter.with_clip_rect(
         Rect::from_min_max(
-            rect.min + Vec2::new(16.0, 88.0 * zoom),
+            rect.min + Vec2::new(16.0, body_top),
             rect.max - Vec2::splat(16.0),
         )
         .intersect(clip),
@@ -245,14 +252,14 @@ fn checklist_preview(painter: &egui::Painter, rect: Rect, clip: Rect, doc: &Docu
     let done = doc.tasks.iter().filter(|task| task.done).count();
     let font = FontId::proportional(16.0 * zoom);
     painter.text(
-        rect.min + Vec2::new(16.0, 88.0 * zoom),
+        rect.min + Vec2::new(16.0, body_top),
         egui::Align2::LEFT_TOP,
         format!("{done}/{} selesai", doc.tasks.len()),
         font.clone(),
         crate::TEXT,
     );
-    for (index, task) in doc.tasks.iter().take(3).enumerate() {
-        let at = rect.min + Vec2::new(16.0, 94.0 + index as f32 * 18.0);
+    for (index, task) in doc.tasks.iter().take(4).enumerate() {
+        let at = rect.min + Vec2::new(16.0, body_top + 22.0 + index as f32 * 18.0);
         let check = Rect::from_min_size(at + Vec2::new(0.0, 2.0), Vec2::splat(10.0));
         painter.rect(
             check,
@@ -313,48 +320,63 @@ impl NotesBoard {
         let checklist = kind == Kind::Checklist;
         let noun = if checklist { "daftar" } else { "catatan" };
         let mut result = BoardResponse::default();
-        let wide = ui.available_width() >= 640.0;
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(if checklist {
-                    "Papan checklist"
-                } else {
-                    "Papan catatan"
-                })
-                .font(FontId::new(32.0, FontFamily::Name("hand".into()))),
-            );
-            if wide {
-                self.actions(ui, documents, kind, &mut result);
-            }
-        });
-        if !wide {
-            self.actions(ui, documents, kind, &mut result);
-        }
         let mut search_changed = false;
-        ui.horizontal(|ui| {
-            search_changed |= ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.query)
-                        .id(egui::Id::new(if checklist {
-                            "checklist-search"
+        let header_frame = egui::Frame::new()
+            .fill(Color32::WHITE)
+            .corner_radius(egui::CornerRadius {
+                nw: crate::SHELL_RADIUS,
+                ne: crate::SHELL_RADIUS,
+                sw: 0,
+                se: 0,
+            })
+            .outer_margin(egui::Margin {
+                left: -8,
+                right: -8,
+                top: -8,
+                bottom: 0,
+            })
+            .inner_margin(egui::Margin {
+                left: 8,
+                right: 8,
+                top: 10,
+                bottom: 10,
+            })
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                let available = ui.available_width();
+                let wide = available >= 620.0;
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(if checklist {
+                            "Papan checklist"
                         } else {
-                            "notes-search"
-                        }))
-                        .hint_text(format!("Cari judul {noun}…"))
-                        .desired_width((ui.available_width() - 44.0).clamp(120.0, 360.0)),
-                )
-                .changed();
-            if !self.query.is_empty()
-                && ui
-                    .small_button("×")
-                    .on_hover_text("Hapus pencarian")
-                    .clicked()
-            {
-                self.query.clear();
-                search_changed = true;
-            }
-        });
-        ui.add_space(16.0);
+                            "Papan catatan"
+                        })
+                        .font(FontId::new(32.0, FontFamily::Name("hand".into()))),
+                    );
+                    if wide {
+                        ui.add_space(10.0);
+                        let search_width = (available - 475.0).clamp(130.0, 280.0);
+                        search_changed |= self.search_box(ui, checklist, noun, search_width);
+                        self.actions(ui, documents, kind, &mut result);
+                    }
+                });
+                if !wide {
+                    ui.add_space(6.0);
+                    let search_width = (ui.available_width() - 36.0).clamp(120.0, 340.0);
+                    ui.horizontal(|ui| {
+                        search_changed |= self.search_box(ui, checklist, noun, search_width);
+                    });
+                    ui.add_space(4.0);
+                    self.actions(ui, documents, kind, &mut result);
+                }
+            });
+        let header_rect = header_frame.response.rect;
+        ui.painter().line_segment(
+            [header_rect.left_bottom(), header_rect.right_bottom()],
+            Stroke::new(0.8_f32, crate::SHELL_BORDER),
+        );
+        ui.add_space(8.0);
         let query = self.query.trim().to_lowercase();
         let searching = !query.is_empty();
         let zoom = 0.8;
@@ -464,17 +486,21 @@ impl NotesBoard {
                 );
                 title.wrap.max_rows = 2;
                 title.wrap.overflow_character = Some('…');
+                let title_top = 13.0;
                 let galley = ui.fonts_mut(|f| f.layout_job(title));
-                painter.galley(rect.min + Vec2::new(16.0, 13.0), galley, ink);
+                let title_height = galley.size().y;
+                painter.galley(rect.min + Vec2::new(16.0, title_top), galley, ink);
+                let divider_y = title_top + title_height + 8.0;
+                let body_top = divider_y + 8.0;
                 painter.line_segment(
                     [
-                        rect.min + Vec2::new(16.0, 78.0 * zoom),
-                        rect.min + Vec2::new(card.x - 16.0, 78.0 * zoom),
+                        rect.min + Vec2::new(16.0, divider_y),
+                        rect.min + Vec2::new(card.x - 16.0, divider_y),
                     ],
                     Stroke::new(0.7_f32, ink.gamma_multiply(0.3)),
                 );
                 if checklist {
-                    checklist_preview(&painter, rect, ui.clip_rect(), doc, zoom);
+                    checklist_preview(&painter, rect, ui.clip_rect(), doc, zoom, body_top);
                 } else {
                     let preview = if doc.body.text.trim().is_empty() {
                         String::new()
@@ -490,12 +516,12 @@ impl NotesBoard {
                     painter
                         .with_clip_rect(
                             Rect::from_min_max(
-                                rect.min + Vec2::new(16.0, 88.0 * zoom),
+                                rect.min + Vec2::new(16.0, body_top),
                                 rect.max - Vec2::splat(16.0),
                             )
                             .intersect(ui.clip_rect()),
                         )
-                        .galley(rect.min + Vec2::new(16.0, 88.0 * zoom), galley, ink);
+                        .galley(rect.min + Vec2::new(16.0, body_top), galley, ink);
                 }
                 if response.clicked() {
                     result.open = Some(doc.id);
@@ -534,6 +560,50 @@ impl NotesBoard {
             }
         });
         result
+    }
+
+    fn search_box(&mut self, ui: &mut egui::Ui, checklist: bool, noun: &str, width: f32) -> bool {
+        let mut changed = false;
+        ui.scope(|ui| {
+            let visuals = ui.visuals_mut();
+            visuals.extreme_bg_color = crate::BG;
+            visuals.widgets.inactive.bg_fill = crate::BG;
+            visuals.widgets.inactive.bg_stroke = Stroke::new(0.7_f32, crate::BUTTON_BORDER);
+            visuals.widgets.hovered.bg_fill = Color32::WHITE;
+            visuals.widgets.hovered.bg_stroke = Stroke::new(0.8_f32, Color32::from_gray(195));
+            visuals.widgets.active.bg_fill = Color32::WHITE;
+            for widget in [
+                &mut visuals.widgets.inactive,
+                &mut visuals.widgets.hovered,
+                &mut visuals.widgets.active,
+            ] {
+                widget.corner_radius = egui::CornerRadius::same(8);
+            }
+            changed |= ui
+                .add_sized(
+                    [width, 32.0],
+                    egui::TextEdit::singleline(&mut self.query)
+                        .id(egui::Id::new(if checklist {
+                            "checklist-search"
+                        } else {
+                            "notes-search"
+                        }))
+                        .hint_text(format!("Cari judul {noun}…"))
+                        .vertical_align(egui::Align::Center)
+                        .margin(egui::Margin::symmetric(10, 6)),
+                )
+                .changed();
+            if !self.query.is_empty()
+                && ui
+                    .add_sized([28.0, 32.0], egui::Button::new("×"))
+                    .on_hover_text("Hapus pencarian")
+                    .clicked()
+            {
+                self.query.clear();
+                changed = true;
+            }
+        });
+        changed
     }
 
     fn actions(

@@ -75,16 +75,206 @@ pub struct Binding {
     pub anchor: Option<Point>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ImageData {
-    #[serde(with = "image_bytes")]
     pub bytes: Arc<Vec<u8>>,
+    pub encoded_cache: Arc<std::sync::OnceLock<String>>,
     pub mime: String,
     pub width: u32,
     pub height: u32,
 }
 
+impl Serialize for ImageData {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use serde::ser::SerializeStruct;
+        let encoded = self
+            .encoded_cache
+            .get_or_init(|| STANDARD.encode(self.bytes.as_slice()));
+        let mut state = serializer.serialize_struct("ImageData", 4)?;
+        state.serialize_field("bytes", encoded)?;
+        state.serialize_field("mime", &self.mime)?;
+        state.serialize_field("width", &self.width)?;
+        state.serialize_field("height", &self.height)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ImageData {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum RawBytes {
+            Encoded(String),
+            Array(Vec<u8>),
+        }
+        #[derive(Deserialize)]
+        struct RawImageData {
+            bytes: RawBytes,
+            mime: String,
+            width: u32,
+            height: u32,
+        }
+        let raw = RawImageData::deserialize(deserializer)?;
+        let encoded_cache = Arc::new(std::sync::OnceLock::new());
+        let bytes = match raw.bytes {
+            RawBytes::Encoded(text) => {
+                if text.len() > 28 * 1024 * 1024 {
+                    return Err(serde::de::Error::custom("Gambar terlalu besar"));
+                }
+                let decoded = STANDARD.decode(&text).map_err(serde::de::Error::custom)?;
+                let _ = encoded_cache.set(text);
+                Arc::new(decoded)
+            }
+            RawBytes::Array(bytes) => Arc::new(bytes),
+        };
+        Ok(Self {
+            bytes,
+            encoded_cache,
+            mime: raw.mime,
+            width: raw.width,
+            height: raw.height,
+        })
+    }
+}
+
+impl PartialEq for ImageData {
+    fn eq(&self, other: &Self) -> bool {
+        self.width == other.width
+            && self.height == other.height
+            && self.mime == other.mime
+            && (Arc::ptr_eq(&self.bytes, &other.bytes) || self.bytes == other.bytes)
+    }
+}
+
+const MAX_DISPLAY_TEXTURE_SIDE: u32 = 1600;
+
+pub type PendingDecode = Arc<std::sync::Mutex<Option<Result<egui::ColorImage, String>>>>;
+
+pub enum TextureSlot {
+    Loading(PendingDecode),
+    Ready(egui::TextureHandle),
+    Failed(String),
+}
+
+impl TextureSlot {
+    pub fn is_loading(&self) -> bool {
+        matches!(self, Self::Loading(_))
+    }
+}
+
+pub fn paint_image_loading(painter: &egui::Painter, ctx: &egui::Context, rect: egui::Rect) {
+    let bg = egui::Color32::from_rgb(245, 244, 240);
+    let border = egui::Color32::from_rgb(214, 210, 202);
+    let track = egui::Color32::from_rgb(220, 216, 208);
+    let accent = egui::Color32::from_rgb(113, 79, 171);
+    let muted = egui::Color32::from_rgb(108, 105, 114);
+    painter.rect_filled(rect, 6.0, bg);
+    painter.rect_stroke(
+        rect,
+        6.0,
+        egui::Stroke::new(1.0_f32, border),
+        egui::StrokeKind::Inside,
+    );
+    let show_caption = rect.height() >= 72.0 && rect.width() >= 120.0;
+    let radius = (rect.width().min(rect.height()) * 0.16).clamp(8.0, 16.0);
+    let center = if show_caption {
+        rect.center() - egui::vec2(0.0, 10.0)
+    } else {
+        rect.center()
+    };
+    painter.circle_stroke(center, radius, egui::Stroke::new(2.2_f32, track));
+    let time = ctx.input(|i| i.time) as f32;
+    let start_angle = time * 5.2;
+    let sweep = std::f32::consts::TAU * 0.68;
+    let steps = 20;
+    let points: Vec<egui::Pos2> = (0..=steps)
+        .map(|step| {
+            let t = step as f32 / steps as f32;
+            let angle = start_angle + t * sweep;
+            center + egui::vec2(angle.cos(), angle.sin()) * radius
+        })
+        .collect();
+    painter.add(egui::Shape::line(
+        points,
+        egui::Stroke::new(2.5_f32, accent),
+    ));
+    if show_caption {
+        painter.text(
+            center + egui::vec2(0.0, radius + 14.0),
+            egui::Align2::CENTER_TOP,
+            "Memuat gambar...",
+            egui::FontId::proportional(13.0),
+            muted,
+        );
+    }
+}
+
 impl ImageData {
+    pub fn cache_key(&self) -> (usize, usize) {
+        (self.bytes.as_ptr() as usize, self.bytes.len())
+    }
+
+    pub fn decode_color_image(bytes: &[u8]) -> Result<egui::ColorImage, String> {
+        let decoded = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+        let display = if decoded.width() > MAX_DISPLAY_TEXTURE_SIDE
+            || decoded.height() > MAX_DISPLAY_TEXTURE_SIDE
+        {
+            decoded.thumbnail(MAX_DISPLAY_TEXTURE_SIDE, MAX_DISPLAY_TEXTURE_SIDE)
+        } else {
+            decoded
+        };
+        let rgba = display.to_rgba8();
+        Ok(egui::ColorImage::from_rgba_unmultiplied(
+            [rgba.width() as usize, rgba.height() as usize],
+            rgba.as_raw(),
+        ))
+    }
+
+    pub fn poll_texture<'a>(
+        &self,
+        cache: &'a mut std::collections::HashMap<(usize, usize), TextureSlot>,
+        ctx: &egui::Context,
+        name: &str,
+    ) -> &'a TextureSlot {
+        let key = self.cache_key();
+        let entry = cache.entry(key).or_insert_with(|| {
+            let pending: PendingDecode = Arc::new(std::sync::Mutex::new(None));
+            let target = pending.clone();
+            let bytes = self.bytes.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let decoded = Self::decode_color_image(&bytes);
+                if let Ok(mut guard) = target.lock() {
+                    *guard = Some(decoded);
+                }
+                ctx.request_repaint();
+            });
+            TextureSlot::Loading(pending)
+        });
+        if let TextureSlot::Loading(pending) = entry {
+            let finished = pending.lock().ok().and_then(|mut guard| guard.take());
+            match finished {
+                Some(Ok(color_image)) => {
+                    let texture = ctx.load_texture(
+                        name.to_owned(),
+                        color_image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    *entry = TextureSlot::Ready(texture);
+                }
+                Some(Err(err)) => {
+                    *entry = TextureSlot::Failed(err);
+                }
+                None => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(16));
+                }
+            }
+        }
+        entry
+    }
+
     pub fn from_path(path: &std::path::Path) -> Result<Self, String> {
         if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > 20 * 1024 * 1024 {
             return Err("Gambar maksimal 20 MB.".into());
@@ -101,6 +291,7 @@ impl ImageData {
             .map_err(|e| e.to_string())?;
         let data = Self {
             bytes: Arc::new(bytes),
+            encoded_cache: Arc::new(std::sync::OnceLock::new()),
             mime: mime.into(),
             width,
             height,
@@ -135,40 +326,6 @@ impl ImageData {
         let ratio = self.height as f32 / self.width as f32;
         let width = ((corner[0] + corner[1] * ratio) / (1.0 + ratio * ratio)).max(30.0);
         self.size_at_width(width)
-    }
-}
-
-mod image_bytes {
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    use serde::{Deserialize, Deserializer, Serializer};
-    use std::sync::Arc;
-    pub fn serialize<S: Serializer>(
-        bytes: &Arc<Vec<u8>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&STANDARD.encode(bytes.as_slice()))
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Arc<Vec<u8>>, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Data {
-            Encoded(String),
-            Array(Vec<u8>),
-        }
-        match Data::deserialize(deserializer)? {
-            Data::Encoded(text) => {
-                if text.len() > 28 * 1024 * 1024 {
-                    return Err(serde::de::Error::custom("Gambar terlalu besar"));
-                }
-                STANDARD
-                    .decode(text)
-                    .map(Arc::new)
-                    .map_err(serde::de::Error::custom)
-            }
-            Data::Array(bytes) => Ok(Arc::new(bytes)),
-        }
     }
 }
 
