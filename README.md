@@ -1,75 +1,87 @@
-# Notez
+# Notvas
 
-Aplikasi desktop native Rust dengan tema gelap. UI menggunakan egui/eframe dan OpenGL, tanpa browser atau WebView.
+Notvas adalah aplikasi desktop Windows untuk menggambar ide, menulis catatan, dan mengelola checklist. Semua data disimpan dalam workspace lokal. Antarmukanya memakai kertas berkotak, tulisan tangan, dan kartu pastel.
 
-## Jalankan
+Proyek masih dalam pengembangan. Source di repository berisi perubahan terbaru; paket EXE lama bisa memiliki fitur yang berbeda.
 
-Klik dua kali `Notez.exe` setelah build portable tersedia, atau jalankan dari PowerShell:
+## Fitur utama
+
+| Modul | Yang bisa dilakukan |
+| --- | --- |
+| Canvas | Menggambar dengan pena dan stabilo, membuat shape, menambahkan teks/gambar, serta menghubungkan objek dengan panah lurus, siku, atau lengkung. Sambungan mengikuti shape saat dipindahkan. |
+| Notes | Menyusun catatan pada papan kartu berwarna, mencari judul, lalu membuka editor penuh. Mendukung format teks, gambar dalam alur tulisan atau overlay, dan ekspor HTML/TXT. |
+| Checklist | Menyusun beberapa daftar pada papan kartu. Setiap kartu menampilkan progres dan cuplikan tugas. Buka daftar untuk mencentang, mengedit, atau menghapus tugas. |
+
+Autosave berjalan setelah jeda mengetik dan saat berpindah dokumen atau menutup aplikasi. Versi sebelumnya disimpan sebagai backup. Ctrl+scroll mengatur zoom; drag kanan atau swipe menggeser area kerja. [Panduan penggunaan dan shortcut](docs/USAGE.md) menjelaskan kontrolnya.
+
+## Tampilan
+
+Canvas dengan shape terhubung, sticky notes, dan panel alat:
+
+![Canvas Notvas dengan alur ide dan sticky notes](docs/screenshots/canvas.png)
+
+Papan Notes dan pencarian judul:
+
+![Papan Notes berisi enam kartu berwarna](docs/screenshots/notes.png)
+
+Papan Checklist dengan progres setiap daftar:
+
+![Papan Checklist berisi daftar dan cuplikan tugas](docs/screenshots/checklist.png)
+
+Lihat juga [editor Notes](docs/screenshots/note-editor.png) dan [daftar Checklist penuh](docs/screenshots/checklist-editor.png). Gambar dibuat dari frame UI Notvas dengan data demo melalui renderer CPU, bukan capture jendela Windows. [Metode dan cara membuat ulang](docs/screenshots/README.md).
+
+## Menjalankan
+
+Gunakan Windows, Rust stable, dan linker yang sesuai dengan toolchain Windows. Dependensi dipatok dalam `Cargo.lock`.
 
 ```powershell
 .\run.ps1
 ```
 
-Toolchain portable untuk mesin ini ada di `.tools` dan tidak mengubah PATH Windows. Untuk komputer lain, pasang Rust stable beserta linker untuk target Windows yang digunakan, lalu `cargo run --release`. Dependensi dipatok melalui `Cargo.lock`.
+Script memakai toolchain portable di `.tools` jika tersedia, atau Cargo dari PATH. `.tools` merupakan folder lokal dan tidak disertakan dalam repository. Untuk build release:
 
 ```powershell
 .\run.ps1 -Release -BuildOnly
 ```
 
-Hasil build ada di `target/release/notez.exe`. Salinan siap jalan ditempatkan di `Notez.exe` pada root proyek.
+Hasilnya ada di `target/release/notvas.exe`. [Panduan distribusi](docs/RELEASING.md) menjelaskan cara membuat ZIP portable beserta lisensinya.
 
-## Logo dan ikon aplikasi
-
-Logo N dipasang pada ikon file EXE Windows, ikon jendela/taskbar, dan header sidebar. Gambar asli ada di `assets/logo-notez.png`. Ikon Windows memakai `assets/notez.ico` dengan ukuran 16, 24, 32, 48, 64, 128, dan 256 px; jendela memakai `assets/notez-icon-256.png`.
-
-Jika gambar asli diganti, jalankan `scripts/make-icon.ps1`, lalu build ulang. `build.rs` menanam resource ikon ke EXE secara otomatis. Build GNU di Windows memakai converter resource .NET Framework bila tersedia, atau `windres` dari binutils. Lokasi converter bisa ditentukan lewat `CVTRES` atau `WINDRES`. Build MSVC menautkan resource langsung.
-
-## Fitur konsep awal
-
-- Notes: format seleksi teks dengan ukuran 12–48 px, bold, italic, underline; atur jarak baris untuk satu catatan. Format tanpa seleksi berlaku untuk tulisan berikutnya. Undo/redo menyertakan format teks, hingga 100 perubahan selama catatan aktif.
-- Checklist: tambah tugas, edit teks, centang selesai, hapus tugas.
-- Kanban: kolom Rencana, Dikerjakan, Selesai; edit judul dan rincian kartu, pindahkan lewat drag handle atau pilihan status.
-- Dokumen terpisah untuk tiap mode, pencarian judul/isi, konfirmasi hapus dokumen.
-- Smart autosave setelah 0,5 detik berhenti mengetik atau menghapus, tanpa tombol Simpan atau Simpan sebagai.
-- Checklist, perubahan format, tambah/hapus tugas, dan perpindahan kartu tersimpan langsung. Perpindahan dokumen, kehilangan fokus jendela, dan penutupan aplikasi menyelesaikan penyimpanan tertunda.
-- Tema monokrom: hitam, abu-abu netral, dan putih lembut, termasuk seleksi teks, hover, dan fokus.
-- Ekspor Notes ke HTML dengan format atau TXT tanpa format.
-
-## Penyimpanan
-
-File awal di Windows: `%APPDATA%\Notez\workspace.notez`. File `.notez` berupa JSON dan berisi seluruh Notes, checklist, dan papan kanban. Semua perubahan tersimpan otomatis; Buka workspace memilih file kerja lain untuk sesi tersebut.
-
-Setiap edit mengulang hitungan jeda 500 ms, termasuk Backspace, Delete, paste, dan undo. Selama mengetik terus-menerus, aplikasi juga menyimpan maksimal tiap 5 detik. Tidak ada penulisan ulang saat tidak ada perubahan. Jika penyimpanan gagal, perubahan tetap di memori dan aplikasi mencoba lagi tiap 2 detik sampai berhasil. Status bawah menampilkan menunggu autosave, tersimpan, atau mencoba kembali. Penutupan ditahan bila perubahan belum berhasil ditulis.
-
-Penulisan memakai file sementara, flush ke disk, lalu rename. Versi sebelumnya dicadangkan sebagai `workspace.notez.bak` pada penyimpanan berikutnya. Cadangan bisa dibuka melalui Buka workspace. File rusak ditampilkan sebagai error dan tidak ditimpa otomatis. Saat terjadi masalah, pilihan folder penyimpanan lain membuat file baru tanpa menimpa workspace yang sudah ada di folder tujuan. Untuk membuka lokasi alternatif pada sesi selanjutnya, gunakan Buka workspace atau argumen `--data-dir`. Jangan membuka file workspace yang sama dalam dua jendela karena versi terakhir yang disimpan akan berlaku.
-
-Untuk memakai folder data terpisah:
+## Development
 
 ```powershell
-.\Notez.exe --data-dir .\data-pribadi
+.\dev.ps1 -Watch
 ```
 
-## Shortcut
+Mode watch memantau source dan aset, meminta aplikasi menyelesaikan autosave, lalu build dan restart. Data development berada di `.dev-data`, terpisah dari data normal. Rust tetap memerlukan kompilasi; perubahan berikutnya memakai cache incremental.
 
-| Shortcut | Fungsi |
-| --- | --- |
-| Ctrl+N | Dokumen baru pada mode aktif |
-| Ctrl+O | Buka workspace |
-| Ctrl+B / Ctrl+I / Ctrl+U | Format teks di editor Notes |
-| Ctrl+Z / Ctrl+Y | Undo / redo di editor Notes |
-| Tab / Shift+Tab | Pindah fokus kontrol |
-| Escape | Batalkan konfirmasi |
-
-## Batas konsep
-
-Belum ada gambar, tabel, PDF, sinkronisasi, enkripsi, dan interoperabilitas DOCX/RTF. HTML adalah ekspor satu arah. Ukuran jendela minimum 940 × 620; papan kanban bisa digulir horizontal. Riwayat undo catatan direset saat berpindah dokumen dan tidak disimpan ke disk.
-
-## Pemeriksaan
-
-Pengujian model meliputi penyisipan/penghapusan Unicode dengan format, escaping HTML, penyimpanan ketiga mode, backup, dan pembacaan file rusak.
+Untuk menjalankan tes:
 
 ```powershell
 .\run.ps1 -Test
 ```
 
-Gunakan environment portable dari `run.ps1` jika Cargo belum ada di PATH. Hasil pemeriksaan build dan UI dicatat di `QA.md`.
+CI menjalankan formatter, tes, dan build di Windows. [Panduan development](docs/DEVELOPMENT.md) mencatat struktur source, data demo, dan generator gambar. Hasil pemeriksaan lokal ada di [QA.md](QA.md).
+
+## Penyimpanan
+
+Lokasi awal workspace adalah `%APPDATA%\Notvas\workspace.notvas`. File `.notvas` berisi JSON, termasuk teks, tugas, objek, dan gambar tertanam. Versi sebelumnya disimpan sebagai `.notvas.bak`. File ini belum dienkripsi.
+
+Untuk memakai folder lain:
+
+```powershell
+.\Notvas.exe --data-dir .\data-pribadi
+```
+
+Notvas tidak memiliki akun, telemetri, atau layanan unggah. Periksa [informasi data dan privasi](PRIVACY.md), terutama sebelum membagikan workspace atau ekspor.
+
+## Batasan
+
+Belum ada sinkronisasi, kolaborasi, enkripsi, impor PDF/PPT/Word, atau dukungan format `.excalidraw`. Smart snap memakai geometri lokal. Ekspor HTML/SVG/PNG bersifat satu arah, dan undo tidak disimpan ke disk. Aplikasi ditujukan untuk Windows; belum ada paket Android/iOS.
+
+## Berkontribusi
+
+Laporkan bug atau usulkan fitur di [Issues](https://github.com/yudnata/notvas/issues). Ikuti [CONTRIBUTING.md](CONTRIBUTING.md) untuk perubahan kode dan [SECURITY.md](SECURITY.md) untuk laporan keamanan. Gunakan data demo saat melampirkan contoh atau gambar.
+
+## Lisensi
+
+Kode dan aset proyek memakai [MIT](LICENSE). Font Patrick Hand tetap memakai [SIL Open Font License 1.1](assets/fonts/OFL-PatrickHand.txt); komponen lain mengikuti lisensi upstream. Lihat [NOTICE.md](NOTICE.md) dan [inventaris dependensi](THIRD_PARTY_NOTICES.md) untuk atribusi serta teks lisensinya.

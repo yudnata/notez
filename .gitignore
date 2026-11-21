@@ -3,5 +3,11 @@
 /dist/
 /test-data/
 *.tmp
-/Notez.exe
+/Notvas.exe
+/.dev-data/
+*.notvas
+*.notvas.bak
+/.env
+/.env.*
+!/.env.example
 

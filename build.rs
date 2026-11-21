@@ -26,15 +26,15 @@ fn resource(output: &mut Vec<u8>, kind: u16, id: u16, data: &[u8]) {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=assets/notez.ico");
+    println!("cargo:rerun-if-changed=assets/notvas.ico");
     println!("cargo:rerun-if-env-changed=WINDRES");
     println!("cargo:rerun-if-env-changed=CVTRES");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
 
-    let icon =
-        fs::read("assets/notez.ico").expect("Missing assets/notez.ico; run scripts/make-icon.ps1");
+    let icon = fs::read("assets/notvas.ico")
+        .expect("Missing assets/notvas.ico; run scripts/make-icon.ps1");
     assert_eq!(u16_at(&icon, 2), 1, "Expected ICO data");
     let count = u16_at(&icon, 4);
     let mut res = Vec::new();
@@ -50,12 +50,12 @@ fn main() {
     }
     resource(&mut res, 14, 1, &group);
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let resource_path = out.join("notez.res");
+    let resource_path = out.join("notvas.res");
     fs::write(&resource_path, res).expect("Cannot write icon resources");
     if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         println!("cargo:rustc-link-arg-bins={}", resource_path.display());
     } else {
-        let object = out.join("notez-icon.o");
+        let object = out.join("notvas-icon.o");
         let cvtres = env::var_os("CVTRES").map(PathBuf::from).or_else(|| {
             let root = PathBuf::from(env::var_os("SystemRoot")?);
             let compiler = root.join("Microsoft.NET/Framework64/v4.0.30319/cvtres.exe");

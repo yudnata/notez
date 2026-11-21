@@ -1,0 +1,22 @@
+name: Laporan bug
+description: Laporkan perilaku yang bisa diulang.
+body:
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Langkah dan hasil
+      description: Apa yang dilakukan, apa yang terjadi, dan apa yang diharapkan?
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Versi dan lingkungan
+      description: Commit atau versi Notvas, versi Windows, dan skala layar.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshot atau contoh
+      description: Gunakan data demo. Jangan unggah workspace pribadi atau kredensial.

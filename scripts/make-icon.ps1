@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 $projectRoot = Split-Path $PSScriptRoot -Parent
-$source = [System.Drawing.Image]::FromFile((Join-Path $projectRoot 'assets\logo-notez.png'))
+$source = [System.Drawing.Image]::FromFile((Join-Path $projectRoot 'assets\logo-notvas.png'))
 $sizes = @(16, 24, 32, 48, 64, 128, 256)
 $frames = [System.Collections.Generic.List[byte[]]]::new()
 try {
@@ -16,7 +16,7 @@ try {
             $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
             $frames.Add($stream.ToArray())
             if ($size -eq 256) {
-                [System.IO.File]::WriteAllBytes((Join-Path $projectRoot 'assets\notez-icon-256.png'), $stream.ToArray())
+                [System.IO.File]::WriteAllBytes((Join-Path $projectRoot 'assets\notvas-icon-256.png'), $stream.ToArray())
             }
         } finally {
             $stream.Dispose()
@@ -25,7 +25,7 @@ try {
         }
     }
 } finally { $source.Dispose() }
-$file = [System.IO.File]::Create((Join-Path $projectRoot 'assets\notez.ico'))
+$file = [System.IO.File]::Create((Join-Path $projectRoot 'assets\notvas.ico'))
 $writer = [System.IO.BinaryWriter]::new($file)
 try {
     $writer.Write([uint16]0)

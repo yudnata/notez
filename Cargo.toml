@@ -1,17 +1,30 @@
 [package]
-name = "notez"
+name = "notvas"
 version = "0.1.0"
 edition = "2024"
-description = "A local desktop notebook with rich notes, checklists, and kanban."
+description = "A local Windows notebook with a sketch canvas, rich notes, and checklist boards."
+license = "MIT"
+authors = ["Nata"]
+repository = "https://github.com/yudnata/notvas"
+readme = "README.md"
+keywords = ["notes", "canvas", "checklist", "desktop", "offline"]
+categories = ["gui", "text-editors"]
 
 [dependencies]
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "accesskit", "wayland", "x11"] }
 egui = "0.33"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 rfd = "0.15"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+base64 = "0.22"
+resvg = { version = "0.45", default-features = false, features = ["text", "raster-images"] }
 
 [profile.release]
 lto = "thin"
 strip = true
+
+[profile.dev]
+debug = 0
+incremental = true
 

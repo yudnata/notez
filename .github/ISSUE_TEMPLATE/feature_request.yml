@@ -1,0 +1,17 @@
+name: Usulan fitur
+description: Jelaskan kebutuhan dan contoh pemakaian.
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: Kebutuhan
+      description: Pekerjaan apa yang sulit dilakukan sekarang?
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Perilaku yang diusulkan
+      description: Berikan contoh alur yang ingin digunakan.
+    validations:
+      required: true

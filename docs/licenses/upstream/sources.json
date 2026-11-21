@@ -1,0 +1,92 @@
+[
+  {
+    "key": "egui",
+    "path": "LICENSE-MIT",
+    "url": "https://github.com/emilk/egui/blob/44cdd653e2317d300fb8a6c9c36b03f23991e803/LICENSE-MIT"
+  },
+  {
+    "key": "zune-core",
+    "path": "LICENSE-ZLIB",
+    "url": "https://raw.githubusercontent.com/etemesi254/zune-image/f8fbb123d5ed04441e8324a555bfcda0cb1bd28f/LICENSE-ZLIB"
+  },
+  {
+    "key": "profiling",
+    "path": "LICENSE-APACHE",
+    "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE"
+  },
+  {
+    "key": "clipboard-win",
+    "path": "LICENSE",
+    "url": "https://raw.githubusercontent.com/DoumanAsh/clipboard-win/ed27008ae5d1f10cfbb266de039f0fb35fd05a56/LICENSE"
+  },
+  {
+    "key": "zune-jpeg",
+    "path": "LICENSE-ZLIB",
+    "url": "https://raw.githubusercontent.com/etemesi254/zune-image/fa2c767a01d7d9373911d0bf63e0588553d67e0e/LICENSE-ZLIB"
+  },
+  {
+    "key": "accesskit-b",
+    "path": "AUTHORS",
+    "url": "https://raw.githubusercontent.com/AccessKit/accesskit/5801c4a49ff9b2c9ec3f77b3c31272d0da4c5cd3/AUTHORS"
+  },
+  {
+    "key": "accesskit-a",
+    "path": "AUTHORS",
+    "url": "https://raw.githubusercontent.com/AccessKit/accesskit/0b6901a8c8e6fb1cb5a2dc7c19dc7bee1cc5ad09/AUTHORS"
+  },
+  {
+    "key": "zune-jpeg",
+    "path": "LICENSE.md",
+    "url": "https://raw.githubusercontent.com/etemesi254/zune-image/fa2c767a01d7d9373911d0bf63e0588553d67e0e/LICENSE.md"
+  },
+  {
+    "key": "profiling",
+    "path": "LICENSE-MIT",
+    "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT"
+  },
+  {
+    "key": "zune-core",
+    "path": "LICENSE.md",
+    "url": "https://raw.githubusercontent.com/etemesi254/zune-image/f8fbb123d5ed04441e8324a555bfcda0cb1bd28f/LICENSE.md"
+  },
+  {
+    "key": "accesskit-b",
+    "path": "LICENSE-APACHE",
+    "url": "https://raw.githubusercontent.com/AccessKit/accesskit/5801c4a49ff9b2c9ec3f77b3c31272d0da4c5cd3/LICENSE-APACHE"
+  },
+  {
+    "key": "accesskit-b",
+    "path": "LICENSE-MIT",
+    "url": "https://raw.githubusercontent.com/AccessKit/accesskit/5801c4a49ff9b2c9ec3f77b3c31272d0da4c5cd3/LICENSE-MIT"
+  },
+  {
+    "key": "accesskit-a",
+    "path": "LICENSE-APACHE",
+    "url": "https://raw.githubusercontent.com/AccessKit/accesskit/0b6901a8c8e6fb1cb5a2dc7c19dc7bee1cc5ad09/LICENSE-APACHE"
+  },
+  {
+    "key": "accesskit-b",
+    "path": "LICENSE.chromium",
+    "url": "https://raw.githubusercontent.com/AccessKit/accesskit/5801c4a49ff9b2c9ec3f77b3c31272d0da4c5cd3/LICENSE.chromium"
+  },
+  {
+    "key": "accesskit-a",
+    "path": "LICENSE-MIT",
+    "url": "https://raw.githubusercontent.com/AccessKit/accesskit/0b6901a8c8e6fb1cb5a2dc7c19dc7bee1cc5ad09/LICENSE-MIT"
+  },
+  {
+    "key": "accesskit-a",
+    "path": "LICENSE.chromium",
+    "url": "https://raw.githubusercontent.com/AccessKit/accesskit/0b6901a8c8e6fb1cb5a2dc7c19dc7bee1cc5ad09/LICENSE.chromium"
+  },
+  {
+    "key": "gl-generator",
+    "path": "LICENSE",
+    "url": "https://raw.githubusercontent.com/rust-windowing/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE"
+  },
+  {
+    "key": "khronos-api",
+    "path": "LICENSE",
+    "url": "https://raw.githubusercontent.com/rust-windowing/gl-rs/f150967b1c44ae888e6676f93f639ebc82771bdc/LICENSE"
+  }
+]

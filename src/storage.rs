@@ -10,7 +10,7 @@ pub fn default_path() -> PathBuf {
     while let Some(arg) = args.next() {
         if arg == "--data-dir" {
             if let Some(dir) = args.next() {
-                return PathBuf::from(dir).join("workspace.notez");
+                return PathBuf::from(dir).join("workspace.notvas");
             }
         }
     }
@@ -18,7 +18,7 @@ pub fn default_path() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/share")))
         .unwrap_or_else(|| PathBuf::from("."));
-    root.join("Notez").join("workspace.notez")
+    root.join("Notvas").join("workspace.notvas")
 }
 
 pub fn load(path: &Path) -> Result<Workspace, String> {
@@ -31,13 +31,13 @@ pub fn load(path: &Path) -> Result<Workspace, String> {
 }
 
 pub fn unused_path(folder: &Path) -> PathBuf {
-    let base = folder.join("workspace.notez");
+    let base = folder.join("workspace.notvas");
     if !base.exists() {
         return base;
     }
     let mut index = 1_u64;
     loop {
-        let path = folder.join(format!("workspace-{index}.notez"));
+        let path = folder.join(format!("workspace-{index}.notvas"));
         if !path.exists() {
             return path;
         }
@@ -57,7 +57,7 @@ pub fn save(path: &Path, workspace: &Workspace) -> Result<(), String> {
         file.sync_all()?;
         drop(file);
         if path.exists() {
-            fs::copy(path, path.with_extension("notez.bak"))?;
+            fs::copy(path, path.with_extension("notvas.bak"))?;
         }
         fs::rename(&temporary, path)?;
         Ok(())
@@ -79,14 +79,14 @@ mod tests {
     #[test]
     fn roundtrip_all_modes_backup_and_corrupt_file() {
         let dir = std::env::temp_dir().join(format!(
-            "notez-test-{}-{}",
+            "notvas-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        let path = dir.join("workspace.notez");
+        let path = dir.join("workspace.notvas");
         let mut ws = Workspace::default();
         ws.add(Kind::Note);
         ws.documents[0].body.reconcile(
@@ -96,8 +96,34 @@ mod tests {
                 ..Default::default()
             },
         );
+        for layout in [
+            crate::model::ImageLayout::Text,
+            crate::model::ImageLayout::Overlay,
+        ] {
+            let body = &mut ws.documents[0].body;
+            body.insert_image(
+                body.text.chars().count(),
+                crate::model::test_image(),
+                "foto.png".into(),
+                TextStyle::default(),
+            );
+            let image = body.images.last_mut().unwrap();
+            image.layout = layout;
+            image.offset = [20.0, 10.0];
+        }
         ws.add(Kind::Checklist);
         ws.add(Kind::Kanban);
+        ws.add(Kind::Canvas);
+        ws.documents[0].note_position = Some([130.0, 240.0]);
+        let mut shape = crate::canvas::model::Element::new(
+            1,
+            crate::canvas::model::ElementKind::Rectangle,
+            [40.0, 60.0],
+            crate::canvas::model::Style::default(),
+        );
+        shape.text = "Shape tersimpan".into();
+        ws.documents[3].canvas.elements.push(shape);
+        ws.documents[3].canvas.next_id = 2;
         let id = ws.id();
         ws.documents[2].tasks.push(Task {
             id,
@@ -113,10 +139,27 @@ mod tests {
         assert!(!recovered_path.exists());
         ws.documents[0].title = "Diubah".into();
         save(&path, &ws).unwrap();
-        assert_ne!(load(&path.with_extension("notez.bak")).unwrap(), ws);
+        assert_ne!(load(&path.with_extension("notvas.bak")).unwrap(), ws);
         fs::write(&path, "rusak").unwrap();
         assert!(load(&path).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "rusak");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_notes_without_board_fields_still_load() {
+        let mut workspace = Workspace::default();
+        workspace.add(Kind::Note);
+        let mut value = serde_json::to_value(&workspace).unwrap();
+        let doc = value["documents"][0].as_object_mut().unwrap();
+        doc.remove("canvas");
+        doc.remove("note_color");
+        doc.remove("note_position");
+        doc["body"].as_object_mut().unwrap().remove("images");
+        let mut restored: Workspace = serde_json::from_value(value).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored.documents[0].title, "Catatan baru");
+        assert!(restored.documents[0].canvas.elements.is_empty());
+        assert!(restored.documents[0].body.images.is_empty());
     }
 }
